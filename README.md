@@ -64,6 +64,7 @@ BENCH_SCENARIOS=2 BENCH_MAX_TOKENS=256 BENCH_TOOL_MAX_TOKENS=512 uv run --frozen
 | Flag | Default | Meaning |
 |---|---|---|
 | `--base-url` | `BENCH_BASE_URL` → `http://192.168.1.5:8888` | endpoint URL |
+| `--api-key` | `BENCH_API_KEY` → none | bearer token for endpoints that require auth |
 | `--model` | auto-detect from `/v1/models` | model id |
 | `--concurrency` | 4 | concurrent streams |
 | `--max-tokens` | 2048 | throughput output cap |
@@ -85,6 +86,7 @@ Precedence: CLI flags → `BENCH_*` env vars → defaults.
 | Variable | Default | Meaning |
 |---|---|---|
 | `BENCH_BASE_URL` | `http://192.168.1.5:8888` | OpenAI-compatible endpoint |
+| `BENCH_API_KEY` | (none) | bearer token; set if the endpoint requires auth |
 | `BENCH_MODEL` | (auto-detect) | model id; unset → first model from `GET /v1/models` |
 | `BENCH_CONCURRENCY` | `4` | concurrent streams for the headline throughput metric |
 | `BENCH_MAX_TOKENS` | `2048` | output-token cap for throughput prompts |

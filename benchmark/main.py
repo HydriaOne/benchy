@@ -43,6 +43,7 @@ class Config:
     repeats: int = field(default_factory=lambda: _env_int("BENCH_REPEATS", 3))
     sweep: bool = field(default_factory=lambda: os.environ.get("BENCH_SWEEP", "").strip().lower() in ("1", "true", "yes", "on"))
     seed: int = field(default_factory=lambda: _env_int("BENCH_SEED", 42))
+    api_key: str | None = field(default_factory=lambda: os.environ.get("BENCH_API_KEY") or None)
 
     @property
     def thinking_kwargs(self) -> dict | None:
@@ -319,7 +320,7 @@ async def _sweep(client, tracker, live, cfg):
 
 async def _main(cfg: Config) -> int:
     random.seed(cfg.seed)
-    client = ChatClient(cfg.base_url, cfg.model or "")
+    client = ChatClient(cfg.base_url, cfg.model or "", api_key=cfg.api_key)
     try:
         models = await client.check()
     except Exception as exc:
@@ -366,6 +367,7 @@ def main() -> int:
         description="tokens/sec + tool-calling benchmark for OpenAI-compatible (SGLang) endpoints",
     )
     parser.add_argument("--base-url", default=None, help="endpoint URL (default: BENCH_BASE_URL, else http://192.168.1.5:8888)")
+    parser.add_argument("--api-key", default=None, help="bearer token for endpoints that require auth (default: BENCH_API_KEY)")
     parser.add_argument("--model", default=None, help="model id (default: auto-detect from /v1/models)")
     parser.add_argument("--concurrency", type=int, default=None, help="concurrent streams (default 4)")
     parser.add_argument("--max-tokens", type=int, default=None, help="output-token cap for throughput prompts (default 2048)")
@@ -384,6 +386,7 @@ def main() -> int:
     for attr, value in (
         ("base_url", args.base_url),
         ("model", args.model),
+        ("api_key", args.api_key),
         ("concurrency", args.concurrency),
         ("max_tokens", args.max_tokens),
         ("tool_max_tokens", args.tool_max_tokens),

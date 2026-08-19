@@ -39,13 +39,15 @@ class StreamResult:
 
 
 class ChatClient:
-    def __init__(self, base_url: str, model: str, timeout: float = 600.0) -> None:
+    def __init__(self, base_url: str, model: str, timeout: float = 600.0, api_key: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout, connect=10.0),
             limits=httpx.Limits(max_connections=16, max_keepalive_connections=16),
+            headers=headers,
         )
 
     async def aclose(self) -> None:
@@ -136,4 +138,9 @@ class ChatClient:
         if usage:
             result.prompt_tokens = usage.get("prompt_tokens") or 0
             result.completion_tokens = usage.get("completion_tokens") or 0
-            result.reasoning_tokens = usage.get("reasoning_tokens") or 0
+            # SGLang: usage.reasoning_tokens — vLLM/OpenAI: usage.completion_tokens_details.reasoning_tokens
+            reas = usage.get("reasoning_tokens") or 0
+            if not reas:
+                details = usage.get("completion_tokens_details") or {}
+                reas = details.get("reasoning_tokens") or 0
+            result.reasoning_tokens = reas
