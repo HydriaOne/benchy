@@ -78,16 +78,11 @@ class ChatClient:
                     model_ids.append(str(m["id"]).lower())
 
         has_gguf = any(".gguf" in s or "gguf" in s for s in model_roots + model_ids)
+        has_mlx = any("mlx" in s for s in model_roots + model_ids) or "mlx" in owned_by_set
 
+        if "mlx" in owned_by_set or has_mlx:
+            return "MLX (mlx-lm)"
         if "vllm" in owned_by_set:
-            try:
-                vr = await self.client.get("/version")
-                if vr.status_code == 200:
-                    v_str = vr.json().get("version")
-                    if v_str:
-                        return f"vLLM (v{v_str})"
-            except Exception:
-                pass
             return "vLLM"
 
         if "sglang" in owned_by_set:
@@ -97,14 +92,6 @@ class ChatClient:
             return "llama.cpp (GGUF)" if has_gguf else "llama.cpp"
 
         if "ollama" in owned_by_set:
-            try:
-                or_resp = await self.client.get("/api/version")
-                if or_resp.status_code == 200:
-                    o_ver = or_resp.json().get("version")
-                    if o_ver:
-                        return f"Ollama (v{o_ver})"
-            except Exception:
-                pass
             return "Ollama"
 
         if any(x in owned_by_set for x in ("lmstudio", "lm-studio")):
@@ -149,22 +136,13 @@ class ChatClient:
 
         # Check vLLM
         if "/version" in probe_map:
-            try:
-                v_data = probe_map["/version"].json()
-                if "version" in v_data:
-                    return f"vLLM (v{v_data['version']})"
-            except Exception:
-                pass
+            return "vLLM"
 
         # Check Ollama
         if "/" in probe_map and "ollama is running" in probe_map["/"].text.lower():
             return "Ollama"
         if "/api/version" in probe_map:
-            try:
-                o_ver = probe_map["/api/version"].json().get("version")
-                return f"Ollama (v{o_ver})" if o_ver else "Ollama"
-            except Exception:
-                return "Ollama"
+            return "Ollama"
 
         # Check llama.cpp / GGUF
         if "/props" in probe_map or "/slots" in probe_map:
@@ -177,8 +155,10 @@ class ChatClient:
             return "TGI"
 
         if has_gguf:
-            return "GGUF (OpenAI-compatible)"
+            return "llama.cpp (GGUF)"
 
+        if has_mlx:
+            return "MLX (mlx-lm)"
         return "OpenAI-Compatible"
 
     async def stream(

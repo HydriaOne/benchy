@@ -4,9 +4,12 @@ device: "DGX-Spark"
 engine: "SGLang"
 endpoint: "http://192.168.1.5:8888"
 date: "2026-08-20T07:15:00.000000+00:00"
-tokens_per_second: 137.590
+tokens_per_second: 196.100
+conc8_tps: 196.100
+conc4_tps: 137.590
 single_stream_tps: 61.528
 time_to_first_token_ms: 260.422
+smart_composite_score: 0.7000
 tool_call_accuracy: 0.7000
 agentic_accuracy: 1.0000
 reasoning_ratio: 0.6481
@@ -27,6 +30,7 @@ reasoning_ratio: 0.6481
 
 | Metric | Value | Details |
 |---|---|---|
+| **8-Concurrent Throughput** | **`196.10 tok/s`** | concurrency sweep (8 streams) |
 | **4-Concurrent Throughput** | **`137.59 tok/s`** | median of 3 reps (spread: 123.8–148.3 tok/s) |
 | **Single-Stream Throughput** | **`61.53 tok/s`** | 3882 tokens generated |
 | **Mean TTFT (Concurrent)** | **`260.4 ms`** | time to first token |

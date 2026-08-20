@@ -140,7 +140,25 @@ class LiveUI:
         table.add_column("A", justify="right", no_wrap=True)
         table.add_column("t/s", justify="right", no_wrap=True)
         table.add_column("result", no_wrap=True)
-        for s in self.tracker.states:
+        max_rows = 10
+        total_states = len(self.tracker.states)
+        if total_states > max_rows:
+            hidden_count = total_states - max_rows
+            table.add_row(
+                f"[dim]+{hidden_count} done[/dim]",
+                "[dim]earlier[/dim]",
+                "[dim]completed[/dim]",
+                "—",
+                "—",
+                "—",
+                "—",
+                "[dim]…[/dim]",
+            )
+            visible_states = self.tracker.states[-max_rows:]
+        else:
+            visible_states = self.tracker.states
+
+        for s in visible_states:
             final = s.status in _FINAL
             table.add_row(
                 s.name,
@@ -161,6 +179,6 @@ class LiveUI:
             title=f"live trace — {active.name if active else '—'}",
             border_style="dim",
             style="dim",
-            height=12,
+            height=8,
         )
         return Group(Panel(self.header, style="bold cyan"), table, trace_panel)

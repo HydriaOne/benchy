@@ -1,12 +1,20 @@
-# Agentic Benchmark — t/s + Tool Calling for OpenAI-compatible (SGLang) Endpoints
+# Agentic & Intelligence Benchmark — Throughput + Tool Calling + IFEval + GSM8K + HumanEval
 
-Benchmark harness for self-hosted models behind an OpenAI-compatible API (SGLang). Measures
-**generation throughput (tokens/sec)** at single-stream and N-way concurrency, plus **agentic
-tool-calling accuracy** (BFCL-style simple/parallel + τ-bench-style multi-turn), with **live
-streamed traces** of the model's reasoning, answers, and tool calls.
+A benchmark harness for **any OpenAI-compatible API** (local, self-hosted, or remote). If your server exposes standard `/v1/chat/completions` and `/v1/models`, it works out of the box — including:
+- **vLLM** & **SGLang** (Linux / GPU servers)
+- **MLX (`mlx-lm.server`)** (Apple Silicon native)
+- **llama.cpp / GGUF (`llama-server`)**
+- **Ollama** & **LM Studio**
+- **TGI**, **Aphrodite Engine**, **TensorRT-LLM**
+- **LiteLLM** proxies or authenticated cloud gateways
 
-Python + `uv`. Deterministic, offline workload (no runtime downloads; only the model endpoint
-is contacted).
+Measures **generation throughput (tokens/sec)** at 1× and N-way concurrency, plus a comprehensive **Composite Intelligence Score** spanning:
+- **Tool Calling & Agentic Evaluation** (BFCL simple, parallel, complex schemas, no-tool restraint + $\tau$-bench multi-turn & error recovery)
+- **Instruction Following** (Google IFEval verifiable constraints)
+- **Multi-Step Math Reasoning** (GSM8K)
+- **Code Intelligence & Execution** (HumanEval with sandboxed Python test execution)
+
+Python + `uv`. Deterministic, offline workload with **live streamed thinking traces**.
 
 ---
 
@@ -16,7 +24,7 @@ is contacted).
 # 1. Install dependencies (creates .venv, resolves uv.lock)
 uv sync
 
-# 2. Run the full benchmark (defaults: single-stream + 4-concurrency, thinking on,
+# 2. Run the full benchmark (defaults: single-stream + 8-concurrency, thinking on,
 #    model auto-detected from the endpoint)
 ./tool-eval-bench --seed 42 --base-url http://192.168.1.5:8888
 #    equivalent: uv run --frozen python -m benchmark.main
@@ -26,36 +34,35 @@ uv sync
 #    scrolling trace of the model's actual streamed thinking and [TOOL] calls.
 ```
 
-Default target: `http://192.168.1.5:8888`. Both the **model** and the **serving engine** (vLLM, SGLang, llama.cpp / GGUF, Ollama, LM Studio, TGI, etc.) are **auto-detected** from the endpoint; override with `--model` / `--engine` (or `BENCH_MODEL` / `BENCH_ENGINE`).
+Default target: `http://192.168.1.5:8888`. Both the **model** and the **serving engine** (vLLM, SGLang, MLX, llama.cpp / GGUF, Ollama, LM Studio, TGI, etc.) are **auto-detected** from the endpoint; override with `--model` / `--engine` (or `BENCH_MODEL` / `BENCH_ENGINE`). Hardware device label defaults to `DGX-Spark` on Linux and auto-detects your Apple chip (e.g. `M4-Max`, `M3-Pro`) on macOS.
 
-Typical run: ~3–4 minutes (4× single-stream prompts, 3× 4-concurrent rounds, 20 tool-call
-scenarios).
+Typical run: ~3–4 minutes (Single 1×, 4-concurrent, and 8-concurrent throughput rounds, plus intelligence suites).
 
 ### Useful variants
 
 ```bash
+# Target any local or remote server:
+./tool-eval-bench --base-url http://localhost:8000                          # vLLM / SGLang default
+./tool-eval-bench --base-url http://localhost:8080                          # MLX (mlx_lm.server) / llama.cpp
+./tool-eval-bench --base-url http://localhost:11434                         # Ollama
+./tool-eval-bench --base-url http://localhost:1234                          # LM Studio
+./tool-eval-bench --base-url https://api.myserver.com/v1 --api-key sk-...  # Remote / Auth Gateway
+
 # Fast mode: disable reasoning + tool-use system prompt → ~9× lower latency, same accuracy
-BENCH_ENABLE_THINKING=false \
-BENCH_SYSTEM_PROMPT="You are a helpful assistant with access to tools. When the user asks for data you cannot know from training (weather, prices, flights, products), you MUST call the matching tool. Never say you cannot provide real-time data — call the tool instead." \
-uv run --frozen python -m benchmark.main
+./tool-eval-bench --no-thinking --system-prompt "You are a helpful assistant with access to tools. When the user asks for data you cannot know from training (weather, prices, flights, products), you MUST call the matching tool. Never say you cannot provide real-time data — call the tool instead."
+
+# Run specific intelligence suites (e.g. only tools + math, or coding only)
+./tool-eval-bench --eval tool,gsm8k
+./tool-eval-bench --eval humaneval
 
 # Concurrency scaling curve (1/2/4/8/16 streams) — shows GPU headroom beyond 4
-BENCH_SWEEP=1 uv run --frozen python -m benchmark.main
+./tool-eval-bench --sweep
 
-# Point at a different endpoint / model
-BENCH_BASE_URL=http://192.168.1.5:8000 BENCH_MODEL=my-model uv run --frozen python -m benchmark.main
-
-# Quick sanity run (2 scenarios, small token budget)
-BENCH_SCENARIOS=2 BENCH_MAX_TOKENS=256 BENCH_TOOL_MAX_TOKENS=512 uv run --frozen python -m benchmark.main
-
-# The same via CLI flags (flags override env vars)
-./tool-eval-bench --no-thinking --sweep
-./tool-eval-bench --base-url http://192.168.1.5:8000 --model my-model
-./tool-eval-bench --scenarios 2 --max-tokens 256 --tool-max-tokens 512
+# Quick sanity run (2 scenarios, small token budget, skip saving report to disk)
+./tool-eval-bench --scenarios 2 --max-tokens 256 --tool-max-tokens 512 --no-record
 ```
 
 ### CLI options (`tool-eval-bench`)
-
 ```bash
 ./tool-eval-bench --seed 42 --base-url http://192.168.1.5:8888
 ```
@@ -68,8 +75,8 @@ BENCH_SCENARIOS=2 BENCH_MAX_TOKENS=256 BENCH_TOOL_MAX_TOKENS=512 uv run --frozen
 | `--results-dir` | `BENCH_RESULTS_DIR` → `results` | directory where report `.md` files are saved |
 | `--engine` | auto-detect (vLLM, SGLang, llama.cpp, Ollama, etc.) | serving engine name/override |
 | `--model` | auto-detect from `/v1/models` | model id |
-| `--concurrency` | 4 | concurrent streams |
-| `--max-tokens` | 2048 | throughput output cap |
+| `--eval` | `all` | evaluation suites: `all` or comma-separated (`tool,ifeval,gsm8k,humaneval`) |
+| `--concurrency` | 8 | concurrent streams |
 | `--tool-max-tokens` | 1536 | per-tool-turn cap |
 | `--scenarios` | 0 (all) | scenario limit |
 | `--repeats` | 3 | concurrent rounds; median reported |
@@ -78,6 +85,7 @@ BENCH_SCENARIOS=2 BENCH_MAX_TOKENS=256 BENCH_TOOL_MAX_TOKENS=512 uv run --frozen
 | `--system-prompt` | none | prepended system message |
 | `--sweep` | off | report 1/2/4/8/16 scaling curve |
 | `--temperature` | 0.0 | sampling temperature |
+| `--no-record` | off | skip saving result report to `results/` markdown file |
 
 Precedence: CLI flags → `BENCH_*` env vars → defaults.
 
@@ -91,10 +99,9 @@ Precedence: CLI flags → `BENCH_*` env vars → defaults.
 | `BENCH_API_KEY` | (none) | bearer token; set if the endpoint requires auth |
 | `BENCH_DEVICE` | `DGX-Spark` | device/GPU label for result filenames |
 | `BENCH_RESULTS_DIR` | `results` | directory to save benchmark `.md` reports |
-| `BENCH_ENGINE` | (auto-detect) | serving engine (e.g. vLLM, SGLang, llama.cpp, Ollama) |
 | `BENCH_MODEL` | (auto-detect) | model id; unset → first model from `GET /v1/models` |
-| `BENCH_CONCURRENCY` | `4` | concurrent streams for the headline throughput metric |
-| `BENCH_MAX_TOKENS` | `2048` | output-token cap for throughput prompts |
+| `BENCH_EVAL` | `all` | active eval suites: `all` or comma-separated (`tool,ifeval,gsm8k,humaneval`) |
+| `BENCH_CONCURRENCY` | `8` | concurrent streams for the headline throughput metric |
 | `BENCH_TOOL_MAX_TOKENS` | `1536` | output-token cap per tool-call turn |
 | `BENCH_SCENARIOS` | `0` (= all) | limit number of tool-call scenarios |
 | `BENCH_REPEATS` | `3` | concurrent-throughput rounds; the median is reported (stability) |
@@ -102,6 +109,7 @@ Precedence: CLI flags → `BENCH_*` env vars → defaults.
 | `BENCH_SYSTEM_PROMPT` | (none) | prepended system message to every request |
 | `BENCH_SWEEP` | `off` | also report the 1/2/4/8/16 concurrency scaling curve |
 | `BENCH_SEED` | `42` | harness RNG seed (workload is fixed at temperature 0) |
+| `BENCH_NO_RECORD` | `off` | do not save result report to `results/` markdown file |
 | temperature | `0.0` | fixed (deterministic workload) |
 
 ---
@@ -113,39 +121,44 @@ human-readable summary is printed above them.
 
 | Metric | Meaning |
 |---|---|
-| `tokens_per_second` | **primary** — 4-concurrent aggregate throughput (median of `BENCH_REPEATS`), total output tokens incl. reasoning |
-| `single_stream_tps` | single-stream throughput |
+| `tokens_per_second` | **primary** — 8-concurrent aggregate throughput (median of `BENCH_REPEATS`), total output tokens incl. reasoning |
+| `conc8_tps` | 8-concurrent throughput |
+| `conc4_tps` | 4-concurrent throughput |
+| `single_stream_tps` | single-stream (1×) throughput |
 | `time_to_first_token_ms` | mean TTFT across concurrent rounds |
-| `tool_call_accuracy` | correct scenarios / total (20): simple+parallel graded on tool name + argument subset; multi-turn graded on final answer |
-| `agentic_accuracy` | multi-turn agentic scenarios only |
+| `smart_composite_score` | **composite intelligence score** — average accuracy across all evaluated intelligence suites |
+| `tool_call_accuracy` | tool calling accuracy (BFCL exact-match, restraint & tau-bench multi-turn) |
+| `ifeval_accuracy` | instruction following accuracy (Google IFEval verifiable constraints) |
+| `gsm8k_accuracy` | grade school math multi-step reasoning accuracy (GSM8K) |
+| `humaneval_accuracy` | Python functional code generation accuracy with unit test execution (HumanEval) |
 | `reasoning_ratio` | reasoning tokens / total output tokens |
-
 ## Results & Leaderboard
 
 After each benchmark run:
 1. **Result Markdown File**: Automatically saved to `results/<device>-<model>.md` (e.g. `results/DGX-Spark-Nemo-3.5-Lightning.md`). Each file contains structured YAML frontmatter, detailed performance tables, tool accuracy breakdown, and CI metrics.
-2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings to stdout comparing models and engines side-by-side:
-   - **🏆 Top 3 Smartest Models** (ranked by tool-calling & agentic accuracy)
-   - **⚡ Top 3 Fastest Models** (ranked by 4-concurrent generation throughput)
+2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings comparing models and engines side-by-side:
+   - **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score)
+   - **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single)
 
 ```
-===============================================================================================
-🏆 Top 3 Smartest Models (Tool Calling & Agentic Accuracy)
-===============================================================================================
- #   Model                      Engine               Device         Tool Acc    Agentic Acc   Throughput
- -   -------------------------- -------------------- -------------- ----------- ------------- ----------
- 1   ornith-1.5-35b-a3b-nvfp4   vLLM (v0.1.dev...)   DGX-Spark      100.0%      N/A           78.0 tok/s
- 2   Nemo-3.5-Lightning         SGLang               DGX-Spark      70.0%       100.0%        137.6 tok/s
+===================================================================================================================
+🏆 Top 3 Smartest Models (Composite Intelligence Score)
+===================================================================================================================
+ #   Model                    Engine       Device       Composite   Tool Acc   IFEval    GSM8K     HumanEval 
+ -   ------------------------ ------------ ------------ ----------- ---------- --------- --------- ----------
+ 1   ornith-1.5-35b-a3b-nvfp4 vLLM         DGX-Spark    75.0%       100.0%     100.0%    100.0%    0.0%      
+ 2   Nemo-3.5-Lightning       SGLang       DGX-Spark    70.0%       70.0%      N/A       N/A       N/A       
 
-===============================================================================================
-⚡ Top 3 Fastest Models (Generation Throughput)
-===============================================================================================
- #   Model                      Engine               Device         4-Conc t/s    Single t/s    Tool Acc
- -   -------------------------- -------------------- -------------- ------------- ------------- ----------
- 1   Nemo-3.5-Lightning         SGLang               DGX-Spark      137.6 tok/s   61.5 tok/s    70.0%
- 2   ornith-1.5-35b-a3b-nvfp4   vLLM (v0.1.dev...)   DGX-Spark      78.0 tok/s    34.6 tok/s    100.0%
-===============================================================================================
+===================================================================================================================
+⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
+===================================================================================================================
+ #   Model                    Engine       Device       8-Conc t/s    4-Conc t/s    Single t/s    Composite   Tool Acc
+ -   ------------------------ ------------ ------------ ------------- ------------- ------------- ----------- ----------
+ 1   Nemo-3.5-Lightning       SGLang       DGX-Spark    196.1 tok/s   137.6 tok/s   61.5 tok/s    70.0%       70.0%
+ 2   ornith-1.5-35b-a3b-nvfp4 vLLM         DGX-Spark    146.8 tok/s   78.7 tok/s    34.4 tok/s    75.0%       100.0%
+===================================================================================================================
 ```
+
 
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
 ## Live output
@@ -165,20 +178,22 @@ clean for `METRIC` parsing.
 
 ## Benchmark design & provenance
 
-- **Tool calling** — modeled on the **Berkeley Function Calling Leaderboard (BFCL)**: the model
-  must emit a function call (name + JSON arguments) from a user turn; graded by tool-name match +
-  argument subset match. Categories:
-  - `simple` (8): single call, argument extraction;
-  - `parallel` (6): multiple calls in one turn;
-  - `multi_turn` (6, **τ-bench / GAIA style**): the harness executes tool calls against a
-    deterministic sandbox, feeds results back, and grades the final answer.
-- **Throughput** — modeled on **LLMPerf** synthetic-generation: fixed prompts, bounded output,
-  tokens/sec measured at 1× and N× concurrency.
-- **Determinism** — temperature 0, vendored fixtures, deterministic canned tool executor
-  (weather/stock/flights/products/email/calculator), no wall-clock or network dependencies
-  beyond the endpoint itself.
-- The model's exact token counts (`completion_tokens`, `reasoning_tokens`) come from the
-  streamed usage chunk SGLang appends at the end of each response.
+- **Tool Calling & Agentic Evaluation** — modeled on the **Berkeley Function Calling Leaderboard (BFCL)** and **$\tau$-bench / GAIA**:
+  - `simple` (8): single-call tool selection and argument extraction.
+  - `parallel` (6): multi-tool calls in a single response turn.
+  - `multi_turn` (6): multi-step execution loop against a deterministic sandbox.
+  - `no_tool` (4): general knowledge / creative questions with tools present; tests tool hallucination restraint.
+  - `error_recovery` (2): tool returns errors/not-found; tests if model self-corrects and adapts parameters.
+  - `complex_args` (1): nested JSON arrays and objects with type validation.
+- **Instruction Following (Google IFEval)** — deterministic verification of hard constraints:
+  - Strict JSON schema adherence with nested type & key constraints.
+  - Negative constraints (e.g. zero commas, forbidden words).
+  - Keyword frequency requirements and exact paragraph counts without bullets.
+  - Highlighting & tag wrappers (`<response>...</response>`, bold headers).
+- **Math Reasoning (GSM8K)** — canonical grade-school multi-step arithmetic word problems with exact integer answer verification (`#### X` / `\boxed{X}`).
+- **Code Intelligence (HumanEval)** — functional Python code generation executed inside a sandboxed Python subprocess against strict unit test assertions.
+- **Throughput** — **LLMPerf**-style synthetic generation measuring single-stream and N-way concurrent tokens/sec with code generation prompts.
+- **Determinism** — temperature 0, vendored fixtures, deterministic canned tool executor, sandboxed code execution, no live internet dependencies.
 
 ### File layout
 
