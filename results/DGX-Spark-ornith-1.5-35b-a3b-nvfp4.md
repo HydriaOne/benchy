@@ -3,64 +3,102 @@ model: "ornith-1.5-35b-a3b-nvfp4"
 device: "DGX-Spark"
 engine: "vLLM"
 endpoint: "http://192.168.1.5:8888"
-date: "2026-08-20T14:34:18.063788+00:00"
-tokens_per_second: 146.616
-conc8_tps: 146.616
-conc4_tps: 76.676
-single_stream_tps: 34.192
-time_to_first_token_ms: 0.000
-total_duration_seconds: 37.888
-smart_composite_score: 0.0000
-tool_call_accuracy: null
-ifeval_accuracy: null
-gsm8k_accuracy: null
-gpqa_accuracy: 0.0000
-humaneval_accuracy: null
+date: "2026-08-20T16:20:32.773060+00:00"
+tokens_per_second: 112.965
+conc8_tps: 112.965
+conc4_tps: 69.094
+single_stream_tps: 35.690
+time_to_first_token_ms: 14655.041
+total_duration_seconds: 736.285
+smart_composite_score: 0.7473
+tool_call_accuracy: 0.9032
+ifeval_accuracy: 0.5000
+gsm8k_accuracy: 0.6667
+gpqa_accuracy: 0.6667
+humaneval_accuracy: 1.0000
 reasoning_ratio: 0.0000
 ---
 
 # Benchmark Report: ornith-1.5-35b-a3b-nvfp4 on DGX-Spark
 
-- **Date:** 2026-08-20 14:34:18 UTC
+- **Date:** 2026-08-20 16:20:32 UTC
 - **Device / GPU:** `DGX-Spark`
 - **Serving Engine:** `vLLM`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `ornith-1.5-35b-a3b-nvfp4`
 - **Thinking Mode:** `on`
-- **Total Execution Time:** **`37.9s`** (37.9s)
-- **Concurrency Tiers:** `Single (1x)`, `4-Concurrent`, `8-Concurrent` (repeats: `1`)
+- **Total Execution Time:** **`12m 16.3s`** (736.3s)
+- **Concurrency Tiers:** `Single (1x)`, `4-Concurrent`, `8-Concurrent` (repeats: `3`)
 - **Seed:** `42`
-- **🧠 Composite Intelligence Score:** **`0.0%`**
+- **🧠 Composite Intelligence Score:** **`74.7%`**
 
 ## ⚡ Throughput Performance
 
 | Metric | Value | Details |
 |---|---|---|
-| **8-Concurrent Throughput** | **`146.62 tok/s`** | median of 1 reps (spread: 146.6–146.6 tok/s) |
-| **4-Concurrent Throughput** | **`76.68 tok/s`** | median of 1 reps (spread: 76.7–76.7 tok/s) |
-| **Single-Stream Throughput** | **`34.19 tok/s`** | 512 tokens generated |
-| **Mean TTFT (8-Concurrent)** | **`0.0 ms`** | time to first token |
-| **Total Execution Time** | **`37.9s`** | total benchmark wall-clock time (37.9s) |
+| **8-Concurrent Throughput** | **`112.97 tok/s`** | median of 3 reps (spread: 108.7–119.4 tok/s) |
+| **4-Concurrent Throughput** | **`69.09 tok/s`** | median of 3 reps (spread: 69.1–72.0 tok/s) |
+| **Single-Stream Throughput** | **`35.69 tok/s`** | 2778 tokens generated |
+| **Mean TTFT (8-Concurrent)** | **`14655.0 ms`** | time to first token |
+| **Total Execution Time** | **`12m 16.3s`** | total benchmark wall-clock time (736.3s) |
 | **Reasoning Ratio** | **`0.000`** | 0.0% of generated tokens spent reasoning |
+
+## 🛠️ Tool-Calling & Agentic Evaluation (BFCL & tau-bench)
+
+| Category | Accuracy | Correct / Total | Details |
+|---|---|---|---|
+| **Overall Tool Accuracy** | **`90.3%`** | 28 / 31 | BFCL exact-match, distractor selection & multi-turn |
+| **Single-Turn (Simple / Parallel / Restraint / Complex / Distractors)** | **`95.2%`** | 20 / 21 | Tool selection, args, restraint, distractors & schemas |
+| **Agentic Multi-Turn (Execution, Chains & Error Recovery)** | **`80.0%`** | 8 / 10 | Multi-step dependency chains & stateful rollback |
+
+**Failed Scenarios:** `s05, er01, er02`
+
+## 📋 Instruction Following (Google IFEval Hard)
+
+| Benchmark | Accuracy | Correct / Total | Details |
+|---|---|---|---|
+| **IFEval Hard Constraints** | **`50.0%`** | 3 / 6 | Multi-constraint conjunctions, JSON ranges, negative constraints |
+
+**Failed Constraints:** `ifeval_h04 (table has only 0 rows (< 3)), ifeval_h05 (section headers following tags are not in ALL CAPS), ifeval_h06 (too short (0 < 50 words))`
+
+## 🔢 Math Reasoning (AIME & Competition Math)
+
+| Benchmark | Accuracy | Correct / Total | Details |
+|---|---|---|---|
+| **AIME / Competition Math** | **`66.7%`** | 4 / 6 | Modular arithmetic, combinatorics, algebra & geometry proofs |
+
+**Failed Problems:** `aime_02 (no integer answer found in response), aime_05 (no integer answer found in response)`
 
 ## 🔬 PhD Science Reasoning (GPQA Diamond)
 
 | Benchmark | Accuracy | Correct / Total | Details |
 |---|---|---|---|
-| **GPQA Diamond (Physics / Chem / Bio)** | **`0.0%`** | 0 / 2 | Google-proof PhD-level deduction & domain reasoning |
+| **GPQA Diamond (Physics / Chem / Bio)** | **`66.7%`** | 4 / 6 | Google-proof PhD-level deduction & domain reasoning |
 
-**Failed Questions:** `gpqa_01 (no choice (A/B/C/D) extracted), gpqa_02 (no choice (A/B/C/D) extracted)`
+**Failed Questions:** `gpqa_01 (no choice (A/B/C/D) extracted), gpqa_04 (no choice (A/B/C/D) extracted)`
+
+## 💻 Code Intelligence (HumanEval+ Data Structures)
+
+| Benchmark | Accuracy | Correct / Total | Details |
+|---|---|---|---|
+| **HumanEval+ Code & Data Structures** | **`100.0%`** | 6 / 6 | LRUCache, MinStack, Trie, interval merging with test execution |
+
+**Failed Unit Tests:** `none`
 
 ## 📊 Machine-Readable Metrics
 
 ```
-METRIC tokens_per_second=146.616
-METRIC conc8_tps=146.616
-METRIC conc4_tps=76.676
-METRIC single_stream_tps=34.192
-METRIC time_to_first_token_ms=0.000
-METRIC total_duration_seconds=37.888
-METRIC smart_composite_score=0.0000
-METRIC gpqa_accuracy=0.0000
+METRIC tokens_per_second=112.965
+METRIC conc8_tps=112.965
+METRIC conc4_tps=69.094
+METRIC single_stream_tps=35.690
+METRIC time_to_first_token_ms=14655.041
+METRIC total_duration_seconds=736.285
+METRIC smart_composite_score=0.7473
+METRIC tool_call_accuracy=0.9032
+METRIC ifeval_accuracy=0.5000
+METRIC gsm8k_accuracy=0.6667
+METRIC gpqa_accuracy=0.6667
+METRIC humaneval_accuracy=1.0000
 METRIC reasoning_ratio=0.0000
 ```
