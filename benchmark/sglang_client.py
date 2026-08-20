@@ -10,6 +10,7 @@ Nemo/Nemotron reasoning models accept `chat_template_kwargs` (e.g.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -53,12 +54,132 @@ class ChatClient:
     async def aclose(self) -> None:
         await self.client.aclose()
 
-    async def check(self) -> list[str]:
+    async def check(self) -> tuple[list[str], str]:
         r = await self.client.get("/v1/models")
         if r.status_code != 200:
             raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
         data = r.json()
-        return [m.get("id") for m in data.get("data", [])]
+        raw_models = data.get("data", [])
+        model_ids = [m.get("id") for m in raw_models if m.get("id")]
+        engine = await self.detect_engine(raw_models)
+        return model_ids, engine
+
+    async def detect_engine(self, raw_models: list[dict] | None = None) -> str:
+        owned_by_set: set[str] = set()
+        model_roots: list[str] = []
+        model_ids: list[str] = []
+        if raw_models:
+            for m in raw_models:
+                if m.get("owned_by"):
+                    owned_by_set.add(str(m["owned_by"]).lower())
+                if m.get("root"):
+                    model_roots.append(str(m["root"]).lower())
+                if m.get("id"):
+                    model_ids.append(str(m["id"]).lower())
+
+        has_gguf = any(".gguf" in s or "gguf" in s for s in model_roots + model_ids)
+
+        if "vllm" in owned_by_set:
+            try:
+                vr = await self.client.get("/version")
+                if vr.status_code == 200:
+                    v_str = vr.json().get("version")
+                    if v_str:
+                        return f"vLLM (v{v_str})"
+            except Exception:
+                pass
+            return "vLLM"
+
+        if "sglang" in owned_by_set:
+            return "SGLang"
+
+        if any(x in owned_by_set for x in ("llamacpp", "llama.cpp", "llama-server", "gguf")):
+            return "llama.cpp (GGUF)" if has_gguf else "llama.cpp"
+
+        if "ollama" in owned_by_set:
+            try:
+                or_resp = await self.client.get("/api/version")
+                if or_resp.status_code == 200:
+                    o_ver = or_resp.json().get("version")
+                    if o_ver:
+                        return f"Ollama (v{o_ver})"
+            except Exception:
+                pass
+            return "Ollama"
+
+        if any(x in owned_by_set for x in ("lmstudio", "lm-studio")):
+            return "LM Studio"
+
+        if "tgi" in owned_by_set:
+            return "TGI"
+
+        if "aphrodite" in owned_by_set:
+            return "Aphrodite"
+
+        if any(x in owned_by_set for x in ("tensorrt_llm", "triton")):
+            return "TensorRT-LLM"
+
+        if "litellm" in owned_by_set:
+            return "LiteLLM"
+
+        # Probe server endpoints concurrently for server identity
+        async def _probe(path: str) -> tuple[str, httpx.Response | None]:
+            try:
+                res = await self.client.get(path)
+                return path, res
+            except Exception:
+                return path, None
+
+        probes = await asyncio.gather(
+            _probe("/"),
+            _probe("/version"),
+            _probe("/get_server_info"),
+            _probe("/props"),
+            _probe("/slots"),
+            _probe("/api/version"),
+            _probe("/info"),
+        )
+        probe_map = {p: r for p, r in probes if r is not None and r.status_code == 200}
+
+        # Check SGLang
+        if "/" in probe_map and "sglang is running" in probe_map["/"].text.lower():
+            return "SGLang"
+        if "/get_server_info" in probe_map:
+            return "SGLang"
+
+        # Check vLLM
+        if "/version" in probe_map:
+            try:
+                v_data = probe_map["/version"].json()
+                if "version" in v_data:
+                    return f"vLLM (v{v_data['version']})"
+            except Exception:
+                pass
+
+        # Check Ollama
+        if "/" in probe_map and "ollama is running" in probe_map["/"].text.lower():
+            return "Ollama"
+        if "/api/version" in probe_map:
+            try:
+                o_ver = probe_map["/api/version"].json().get("version")
+                return f"Ollama (v{o_ver})" if o_ver else "Ollama"
+            except Exception:
+                return "Ollama"
+
+        # Check llama.cpp / GGUF
+        if "/props" in probe_map or "/slots" in probe_map:
+            return "llama.cpp (GGUF)" if has_gguf else "llama.cpp"
+        if "/" in probe_map and any(x in probe_map["/"].text.lower() for x in ("llama.cpp", "llama-server")):
+            return "llama.cpp (GGUF)" if has_gguf else "llama.cpp"
+
+        # Check TGI
+        if "/info" in probe_map:
+            return "TGI"
+
+        if has_gguf:
+            return "GGUF (OpenAI-compatible)"
+
+        return "OpenAI-Compatible"
 
     async def stream(
         self,

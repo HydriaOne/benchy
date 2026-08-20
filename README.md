@@ -26,8 +26,7 @@ uv sync
 #    scrolling trace of the model's actual streamed thinking and [TOOL] calls.
 ```
 
-Default target: `http://192.168.1.5:8888` (SGLang). The model is **auto-detected** from
-`GET /v1/models`; override with `--model` or `BENCH_MODEL`.
+Default target: `http://192.168.1.5:8888`. Both the **model** and the **serving engine** (vLLM, SGLang, llama.cpp / GGUF, Ollama, LM Studio, TGI, etc.) are **auto-detected** from the endpoint; override with `--model` / `--engine` (or `BENCH_MODEL` / `BENCH_ENGINE`).
 
 Typical run: ~3–4 minutes (4× single-stream prompts, 3× 4-concurrent rounds, 20 tool-call
 scenarios).
@@ -67,6 +66,7 @@ BENCH_SCENARIOS=2 BENCH_MAX_TOKENS=256 BENCH_TOOL_MAX_TOKENS=512 uv run --frozen
 | `--api-key` | `BENCH_API_KEY` → none | bearer token for endpoints that require auth |
 | `--device`, `--gpu` | `BENCH_DEVICE` → `DGX-Spark` | device/GPU name for result filenames |
 | `--results-dir` | `BENCH_RESULTS_DIR` → `results` | directory where report `.md` files are saved |
+| `--engine` | auto-detect (vLLM, SGLang, llama.cpp, Ollama, etc.) | serving engine name/override |
 | `--model` | auto-detect from `/v1/models` | model id |
 | `--concurrency` | 4 | concurrent streams |
 | `--max-tokens` | 2048 | throughput output cap |
@@ -91,6 +91,7 @@ Precedence: CLI flags → `BENCH_*` env vars → defaults.
 | `BENCH_API_KEY` | (none) | bearer token; set if the endpoint requires auth |
 | `BENCH_DEVICE` | `DGX-Spark` | device/GPU label for result filenames |
 | `BENCH_RESULTS_DIR` | `results` | directory to save benchmark `.md` reports |
+| `BENCH_ENGINE` | (auto-detect) | serving engine (e.g. vLLM, SGLang, llama.cpp, Ollama) |
 | `BENCH_MODEL` | (auto-detect) | model id; unset → first model from `GET /v1/models` |
 | `BENCH_CONCURRENCY` | `4` | concurrent streams for the headline throughput metric |
 | `BENCH_MAX_TOKENS` | `2048` | output-token cap for throughput prompts |
@@ -123,9 +124,28 @@ human-readable summary is printed above them.
 
 After each benchmark run:
 1. **Result Markdown File**: Automatically saved to `results/<device>-<model>.md` (e.g. `results/DGX-Spark-Nemo-3.5-Lightning.md`). Each file contains structured YAML frontmatter, detailed performance tables, tool accuracy breakdown, and CI metrics.
-2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings to stdout:
+2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings to stdout comparing models and engines side-by-side:
    - **🏆 Top 3 Smartest Models** (ranked by tool-calling & agentic accuracy)
    - **⚡ Top 3 Fastest Models** (ranked by 4-concurrent generation throughput)
+
+```
+===============================================================================================
+🏆 Top 3 Smartest Models (Tool Calling & Agentic Accuracy)
+===============================================================================================
+ #   Model                      Engine               Device         Tool Acc    Agentic Acc   Throughput
+ -   -------------------------- -------------------- -------------- ----------- ------------- ----------
+ 1   ornith-1.5-35b-a3b-nvfp4   vLLM (v0.1.dev...)   DGX-Spark      100.0%      N/A           78.0 tok/s
+ 2   Nemo-3.5-Lightning         SGLang               DGX-Spark      70.0%       100.0%        137.6 tok/s
+
+===============================================================================================
+⚡ Top 3 Fastest Models (Generation Throughput)
+===============================================================================================
+ #   Model                      Engine               Device         4-Conc t/s    Single t/s    Tool Acc
+ -   -------------------------- -------------------- -------------- ------------- ------------- ----------
+ 1   Nemo-3.5-Lightning         SGLang               DGX-Spark      137.6 tok/s   61.5 tok/s    70.0%
+ 2   ornith-1.5-35b-a3b-nvfp4   vLLM (v0.1.dev...)   DGX-Spark      78.0 tok/s    34.6 tok/s    100.0%
+===============================================================================================
+```
 
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
 ## Live output

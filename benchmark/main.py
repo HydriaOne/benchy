@@ -48,6 +48,7 @@ class Config:
     seed: int = field(default_factory=lambda: _env_int("BENCH_SEED", 42))
     api_key: str | None = field(default_factory=lambda: os.environ.get("BENCH_API_KEY") or None)
     device: str = field(default_factory=lambda: os.environ.get("BENCH_DEVICE") or os.environ.get("BENCH_GPU") or "DGX-Spark")
+    engine: str | None = field(default_factory=lambda: os.environ.get("BENCH_ENGINE") or None)
     results_dir: str = field(default_factory=lambda: os.environ.get("BENCH_RESULTS_DIR", "results"))
 
     @property
@@ -262,6 +263,7 @@ def _save_report_md(
         "---",
         f'model: "{cfg.model}"',
         f'device: "{cfg.device}"',
+        f'engine: "{cfg.engine or "auto"}"',
         f'endpoint: "{cfg.base_url}"',
         f'date: "{date_iso}"',
         f"tokens_per_second: {conc_tps:.3f}",
@@ -276,6 +278,7 @@ def _save_report_md(
         "",
         f"- **Date:** {date_str}",
         f"- **Device / GPU:** `{cfg.device}`",
+        f"- **Serving Engine:** `{cfg.engine or 'OpenAI-Compatible'}`",
         f"- **Endpoint:** `{cfg.base_url}`",
         f"- **Model:** `{cfg.model}`",
         f"- **Thinking Mode:** `{'on' if cfg.enable_thinking else 'off'}`",
@@ -438,33 +441,35 @@ def _print_leaderboard(results_dir: str) -> None:
     )[:3]
 
     print()
-    print("=" * 74)
+    print("=" * 95)
     print("🏆 Top 3 Smartest Models (Tool Calling & Agentic Accuracy)")
-    print("=" * 74)
-    print(f" {'#':<3} {'Model':<26} {'Device':<14} {'Tool Acc':<11} {'Agentic Acc':<13} {'Throughput'}")
-    print(f" {'-':<3} {'-'*26:<26} {'-'*14:<14} {'-'*11:<11} {'-'*13:<13} {'-'*10}")
+    print("=" * 95)
+    print(f" {'#':<3} {'Model':<26} {'Engine':<20} {'Device':<14} {'Tool Acc':<11} {'Agentic Acc':<13} {'Throughput'}")
+    print(f" {'-':<3} {'-'*26:<26} {'-'*20:<20} {'-'*14:<14} {'-'*11:<11} {'-'*13:<13} {'-'*10}")
     for i, m in enumerate(smartest, 1):
         model_str = str(m.get("model", "unknown"))[:26]
+        eng_str = str(m.get("engine", "unknown"))[:20]
         dev_str = str(m.get("device", "unknown"))[:14]
         tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
         ag_acc = f"{float(m['agentic_accuracy']) * 100:.1f}%" if m.get("agentic_accuracy") is not None else "N/A"
         tps_val = f"{float(m['tokens_per_second']):.1f} tok/s" if m.get("tokens_per_second") is not None else "N/A"
-        print(f" {i:<3} {model_str:<26} {dev_str:<14} {tool_acc:<11} {ag_acc:<13} {tps_val}")
+        print(f" {i:<3} {model_str:<26} {eng_str:<20} {dev_str:<14} {tool_acc:<11} {ag_acc:<13} {tps_val}")
 
     print()
-    print("=" * 74)
+    print("=" * 95)
     print("⚡ Top 3 Fastest Models (Generation Throughput)")
-    print("=" * 74)
-    print(f" {'#':<3} {'Model':<26} {'Device':<14} {'4-Conc t/s':<13} {'Single t/s':<13} {'Tool Acc'}")
-    print(f" {'-':<3} {'-'*26:<26} {'-'*14:<14} {'-'*13:<13} {'-'*13:<13} {'-'*10}")
+    print("=" * 95)
+    print(f" {'#':<3} {'Model':<26} {'Engine':<20} {'Device':<14} {'4-Conc t/s':<13} {'Single t/s':<13} {'Tool Acc'}")
+    print(f" {'-':<3} {'-'*26:<26} {'-'*20:<20} {'-'*14:<14} {'-'*13:<13} {'-'*13:<13} {'-'*10}")
     for i, m in enumerate(fastest, 1):
         model_str = str(m.get("model", "unknown"))[:26]
+        eng_str = str(m.get("engine", "unknown"))[:20]
         dev_str = str(m.get("device", "unknown"))[:14]
         c_tps = f"{float(m['tokens_per_second']):.1f} tok/s" if m.get("tokens_per_second") is not None else "N/A"
         s_tps = f"{float(m['single_stream_tps']):.1f} tok/s" if m.get("single_stream_tps") is not None else "N/A"
         tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<26} {dev_str:<14} {c_tps:<13} {s_tps:<13} {tool_acc}")
-    print("=" * 74)
+        print(f" {i:<3} {model_str:<26} {eng_str:<20} {dev_str:<14} {c_tps:<13} {s_tps:<13} {tool_acc}")
+    print("=" * 95)
 
 def _report(cfg, single, conc_reps, sc_results, sweep_data=None) -> int:
     def tok_sum(rs):
@@ -505,6 +510,7 @@ def _report(cfg, single, conc_reps, sc_results, sweep_data=None) -> int:
     print()
     print("=== Agentic Benchmark Summary ===")
     print(f"endpoint : {cfg.base_url}")
+    print(f"engine   : {cfg.engine or 'auto'}")
     print(f"device   : {cfg.device}")
     print(f"model    : {cfg.model}")
     print(f"thinking : {'on' if cfg.enable_thinking else 'off'}")
@@ -593,7 +599,10 @@ async def _main(cfg: Config) -> int:
     random.seed(cfg.seed)
     client = ChatClient(cfg.base_url, cfg.model or "", api_key=cfg.api_key)
     try:
-        models = await client.check()
+        models, detected_engine = await client.check()
+        if not cfg.engine:
+            cfg.engine = detected_engine
+            print(f"auto-detected engine: {cfg.engine}", file=sys.stderr)
     except Exception as exc:
         print(f"FATAL: cannot reach endpoint {cfg.base_url}: {exc}", file=sys.stderr)
         return 2
@@ -608,13 +617,13 @@ async def _main(cfg: Config) -> int:
     tracker = Tracker()
     live = LiveUI(
         tracker=tracker,
-        header=f"Agentic benchmark — {cfg.model} on {cfg.device} @ {cfg.base_url} (thinking={'on' if cfg.enable_thinking else 'off'}, temp={cfg.temperature}, seed={cfg.seed})",
+        header=f"Agentic benchmark — {cfg.model} [{cfg.engine}] on {cfg.device} @ {cfg.base_url} (thinking={'on' if cfg.enable_thinking else 'off'}, temp={cfg.temperature}, seed={cfg.seed})",
         enabled=sys.stderr.isatty(),
     )
     live.start()
     try:
         print(
-            f"benchmark: {cfg.model} on {cfg.device} @ {cfg.base_url} concurrency={cfg.concurrency} "
+            f"benchmark: {cfg.model} [{cfg.engine}] on {cfg.device} @ {cfg.base_url} concurrency={cfg.concurrency} "
             f"max_tokens={cfg.max_tokens} thinking={'on' if cfg.enable_thinking else 'off'} seed={cfg.seed}",
             file=sys.stderr,
         )
@@ -641,6 +650,7 @@ def main() -> int:
     parser.add_argument("--api-key", default=None, help="bearer token for endpoints that require auth (default: BENCH_API_KEY)")
     parser.add_argument("--device", "--gpu", dest="device", default=None, help="device/GPU name for result filenames (default: BENCH_DEVICE or DGX-Spark)")
     parser.add_argument("--results-dir", default=None, help="directory to store result markdown files (default: results)")
+    parser.add_argument("--engine", default=None, help="serving engine name/override (default: auto-detect e.g. vLLM, SGLang, llama.cpp)")
     parser.add_argument("--model", default=None, help="model id (default: auto-detect from /v1/models)")
     parser.add_argument("--concurrency", type=int, default=None, help="concurrent streams (default 4)")
     parser.add_argument("--max-tokens", type=int, default=None, help="output-token cap for throughput prompts (default 2048)")
@@ -660,6 +670,7 @@ def main() -> int:
         ("base_url", args.base_url),
         ("model", args.model),
         ("device", args.device),
+        ("engine", args.engine),
         ("results_dir", args.results_dir),
         ("api_key", args.api_key),
         ("concurrency", args.concurrency),

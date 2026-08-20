@@ -1,6 +1,7 @@
 ---
 model: "Nemo-3.5-Lightning"
 device: "DGX-Spark"
+engine: "SGLang"
 endpoint: "http://192.168.1.5:8888"
 date: "2026-08-20T07:15:00.000000+00:00"
 tokens_per_second: 137.590
@@ -15,6 +16,7 @@ reasoning_ratio: 0.6481
 
 - **Date:** 2026-08-20 07:15:00 UTC
 - **Device / GPU:** `DGX-Spark`
+- **Serving Engine:** `SGLang`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `Nemo-3.5-Lightning`
 - **Thinking Mode:** `on`
