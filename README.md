@@ -1,4 +1,6 @@
-# Agentic & Frontier Intelligence Benchmark — Throughput (1x, 4x, 8x) + Tool Calling + IFEval Hard + AIME Math + GPQA Diamond + HumanEval+
+# benchy: Frontier Agentic & LLM Intelligence Benchmark
+
+> **High-Throughput (1x, 4x, 8x) • BFCL & $\\tau$-bench • IFEval Hard • AIME Math • GPQA Diamond • HumanEval+**
 
 A high-performance benchmark harness for **any OpenAI-compatible API** (local, self-hosted, or remote). If your server exposes standard `/v1/chat/completions` and `/v1/models`, it works out of the box — including:
 - **vLLM** & **SGLang** (Linux / GPU servers)
