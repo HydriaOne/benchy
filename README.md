@@ -65,6 +65,8 @@ BENCH_SCENARIOS=2 BENCH_MAX_TOKENS=256 BENCH_TOOL_MAX_TOKENS=512 uv run --frozen
 |---|---|---|
 | `--base-url` | `BENCH_BASE_URL` → `http://192.168.1.5:8888` | endpoint URL |
 | `--api-key` | `BENCH_API_KEY` → none | bearer token for endpoints that require auth |
+| `--device`, `--gpu` | `BENCH_DEVICE` → `DGX-Spark` | device/GPU name for result filenames |
+| `--results-dir` | `BENCH_RESULTS_DIR` → `results` | directory where report `.md` files are saved |
 | `--model` | auto-detect from `/v1/models` | model id |
 | `--concurrency` | 4 | concurrent streams |
 | `--max-tokens` | 2048 | throughput output cap |
@@ -87,6 +89,8 @@ Precedence: CLI flags → `BENCH_*` env vars → defaults.
 |---|---|---|
 | `BENCH_BASE_URL` | `http://192.168.1.5:8888` | OpenAI-compatible endpoint |
 | `BENCH_API_KEY` | (none) | bearer token; set if the endpoint requires auth |
+| `BENCH_DEVICE` | `DGX-Spark` | device/GPU label for result filenames |
+| `BENCH_RESULTS_DIR` | `results` | directory to save benchmark `.md` reports |
 | `BENCH_MODEL` | (auto-detect) | model id; unset → first model from `GET /v1/models` |
 | `BENCH_CONCURRENCY` | `4` | concurrent streams for the headline throughput metric |
 | `BENCH_MAX_TOKENS` | `2048` | output-token cap for throughput prompts |
@@ -115,6 +119,15 @@ human-readable summary is printed above them.
 | `agentic_accuracy` | multi-turn agentic scenarios only |
 | `reasoning_ratio` | reasoning tokens / total output tokens |
 
+## Results & Leaderboard
+
+After each benchmark run:
+1. **Result Markdown File**: Automatically saved to `results/<device>-<model>.md` (e.g. `results/DGX-Spark-Nemo-3.5-Lightning.md`). Each file contains structured YAML frontmatter, detailed performance tables, tool accuracy breakdown, and CI metrics.
+2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings to stdout:
+   - **🏆 Top 3 Smartest Models** (ranked by tool-calling & agentic accuracy)
+   - **⚡ Top 3 Fastest Models** (ranked by 4-concurrent generation throughput)
+
+*(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
 ## Live output
 
 On a TTY, `rich` renders:
@@ -152,8 +165,9 @@ clean for `METRIC` parsing.
 ```
 tool-eval-bench          # CLI entrypoint (execs `uv run --frozen python -m benchmark.main "$@"`)
 pyproject.toml, uv.lock  # uv project (httpx, rich)
+results/                 # benchmark result reports (<device>-<model>.md)
 benchmark/
-  main.py                # orchestrator, metrics, METRIC output
+  main.py                # orchestrator, metrics, leaderboard, METRIC output
   sglang_client.py       # async SSE client (reasoning_content + tool-call fragments + usage)
   scenarios.py           # vendored tool scenarios, tool schemas, deterministic executor, throughput prompts
   grade.py               # BFCL-style call match + τ-bench-style outcome grading
