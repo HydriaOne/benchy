@@ -1,4 +1,4 @@
-"""Benchmark orchestrator: throughput (1x + 4x + 8x), tool calling, IFEval, GSM8K, and HumanEval.
+"""Benchmark orchestrator: throughput (1x + 4x + 8x), tool calling, IFEval, AIME Math, GPQA Diamond, and HumanEval+.
 
 Prints `METRIC <name>=<value>` lines on stdout; live traces on stderr.
 """
@@ -20,6 +20,7 @@ from typing import Any
 from .grade import (
     answer_correct,
     args_subset,
+    grade_gpqa,
     grade_gsm8k,
     grade_humaneval,
     grade_ifeval,
@@ -29,6 +30,7 @@ from .grade import (
 )
 from .live import LiveUI, ReqState, Tracker
 from .scenarios import (
+    GPQA_SCENARIOS,
     GSM8K_SCENARIOS,
     HUMANEVAL_SCENARIOS,
     IFEVAL_SCENARIOS,
@@ -208,7 +210,7 @@ def _grade(sc: dict, first_calls: list[dict], final_answer: str) -> tuple[bool, 
     cat = sc["category"]
     if cat == "no_tool":
         return grade_no_tool(first_calls, final_answer, sc.get("expected_answer"))
-    if cat in ("simple", "parallel", "complex_args"):
+    if cat in ("simple", "parallel", "complex_args", "distractor_tools"):
         ok = match_calls(sc["expected_calls"], first_calls)
         return ok, "calls-ok" if ok else f"calls-mismatch got={len(first_calls)}/{len(sc['expected_calls'])}"
     # multi_turn, error_recovery
@@ -216,7 +218,7 @@ def _grade(sc: dict, first_calls: list[dict], final_answer: str) -> tuple[bool, 
     return ok, "answer-ok" if ok else "answer-mismatch"
 
 
-async def _run_scenario(client, tracker, live, cfg, sc):
+async def _run_scenario(client, tracker, live, cfg, sc) -> ScenarioResult:
     name = sc["id"]
     st = tracker.add(name, f"tool/{sc['category']}")
     st.started_at = time.monotonic()
@@ -229,7 +231,7 @@ async def _run_scenario(client, tracker, live, cfg, sc):
     tot_tokens = 0
     tot_reasoning = 0
     try:
-        for turn in range(3):
+        for turn in range(4):
             res = await _run_stream(
                 client, st, tracker, live, messages,
                 tools=tools, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
@@ -272,111 +274,151 @@ async def _run_scenario(client, tracker, live, cfg, sc):
         live.note_done(st)
 
 
+async def _run_eval_suite(client, tracker, live, cfg, scenarios, runner_fn) -> list[ScenarioResult]:
+    sem = asyncio.Semaphore(max(1, cfg.concurrency))
+
+    async def _one(sc):
+        async with sem:
+            return await runner_fn(client, tracker, live, cfg, sc)
+
+    return list(await asyncio.gather(*[_one(sc) for sc in scenarios]))
+
+
 async def _toolcalls(client, tracker, live, cfg) -> list[ScenarioResult]:
     scenarios = SCENARIOS if cfg.scenario_limit <= 0 else SCENARIOS[: cfg.scenario_limit]
-    results = []
-    for sc in scenarios:
-        results.append(await _run_scenario(client, tracker, live, cfg, sc))
-    return results
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _run_scenario)
+
+
+async def _one_ifeval(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "ifeval")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": sc["prompt"]}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="ifeval", error=res.error,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_ifeval(sc["rule_id"], res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="ifeval", ok=ok, detail=detail,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
 
 
 async def _run_ifeval(client, tracker, live, cfg) -> list[ScenarioResult]:
     scenarios = IFEVAL_SCENARIOS if cfg.scenario_limit <= 0 else IFEVAL_SCENARIOS[: cfg.scenario_limit]
-    results = []
-    for sc in scenarios:
-        name = sc["id"]
-        st = tracker.add(name, "ifeval")
-        st.started_at = time.monotonic()
-        messages = [{"role": "user", "content": sc["prompt"]}]
-        if cfg.system_prompt:
-            messages.insert(0, {"role": "system", "content": cfg.system_prompt})
-        try:
-            res = await _run_stream(
-                client, st, tracker, live, messages,
-                tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
-                chat_template_kwargs=cfg.thinking_kwargs,
-            )
-            if res.error:
-                st.status = "error"
-                results.append(ScenarioResult(id=name, category="ifeval", error=res.error,
-                                              completion_tokens=res.completion_tokens,
-                                              reasoning_tokens=res.reasoning_tokens))
-                continue
-            ok, detail = grade_ifeval(sc["rule_id"], res.content)
-            st.status = "ok" if ok else "fail"
-            st.finish_reason = detail
-            results.append(ScenarioResult(id=name, category="ifeval", ok=ok, detail=detail,
-                                          completion_tokens=res.completion_tokens,
-                                          reasoning_tokens=res.reasoning_tokens))
-        finally:
-            live.note_done(st)
-    return results
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_ifeval)
+
+
+async def _one_gsm8k(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "aime")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": sc["prompt"]}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="aime", error=res.error,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_gsm8k(sc["expected_answer"], res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="aime", ok=ok, detail=detail,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
 
 
 async def _run_gsm8k(client, tracker, live, cfg) -> list[ScenarioResult]:
     scenarios = GSM8K_SCENARIOS if cfg.scenario_limit <= 0 else GSM8K_SCENARIOS[: cfg.scenario_limit]
-    results = []
-    for sc in scenarios:
-        name = sc["id"]
-        st = tracker.add(name, "gsm8k")
-        st.started_at = time.monotonic()
-        messages = [{"role": "user", "content": sc["prompt"]}]
-        if cfg.system_prompt:
-            messages.insert(0, {"role": "system", "content": cfg.system_prompt})
-        try:
-            res = await _run_stream(
-                client, st, tracker, live, messages,
-                tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
-                chat_template_kwargs=cfg.thinking_kwargs,
-            )
-            if res.error:
-                st.status = "error"
-                results.append(ScenarioResult(id=name, category="gsm8k", error=res.error,
-                                              completion_tokens=res.completion_tokens,
-                                              reasoning_tokens=res.reasoning_tokens))
-                continue
-            ok, detail = grade_gsm8k(sc["expected_answer"], res.content)
-            st.status = "ok" if ok else "fail"
-            st.finish_reason = detail
-            results.append(ScenarioResult(id=name, category="gsm8k", ok=ok, detail=detail,
-                                          completion_tokens=res.completion_tokens,
-                                          reasoning_tokens=res.reasoning_tokens))
-        finally:
-            live.note_done(st)
-    return results
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_gsm8k)
+
+
+async def _one_gpqa(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "gpqa")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": sc["prompt"]}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="gpqa", error=res.error,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_gpqa(sc["expected_answer"], res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="gpqa", ok=ok, detail=detail,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
+
+
+async def _run_gpqa(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = GPQA_SCENARIOS if cfg.scenario_limit <= 0 else GPQA_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_gpqa)
+
+
+async def _one_humaneval(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "humaneval")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": f"Complete the following Python code:\n\n{sc['prompt']}"}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="humaneval", error=res.error,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_humaneval(sc["prompt"], sc["test"], res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="humaneval", ok=ok, detail=detail,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
 
 
 async def _run_humaneval(client, tracker, live, cfg) -> list[ScenarioResult]:
     scenarios = HUMANEVAL_SCENARIOS if cfg.scenario_limit <= 0 else HUMANEVAL_SCENARIOS[: cfg.scenario_limit]
-    results = []
-    for sc in scenarios:
-        name = sc["id"]
-        st = tracker.add(name, "humaneval")
-        st.started_at = time.monotonic()
-        messages = [{"role": "user", "content": f"Complete the following Python function:\n\n{sc['prompt']}"}]
-        if cfg.system_prompt:
-            messages.insert(0, {"role": "system", "content": cfg.system_prompt})
-        try:
-            res = await _run_stream(
-                client, st, tracker, live, messages,
-                tools=None, max_tokens=cfg.max_tokens, temperature=cfg.temperature,
-                chat_template_kwargs=cfg.thinking_kwargs,
-            )
-            if res.error:
-                st.status = "error"
-                results.append(ScenarioResult(id=name, category="humaneval", error=res.error,
-                                              completion_tokens=res.completion_tokens,
-                                              reasoning_tokens=res.reasoning_tokens))
-                continue
-            ok, detail = grade_humaneval(sc["prompt"], sc["test"], res.content)
-            st.status = "ok" if ok else "fail"
-            st.finish_reason = detail
-            results.append(ScenarioResult(id=name, category="humaneval", ok=ok, detail=detail,
-                                          completion_tokens=res.completion_tokens,
-                                          reasoning_tokens=res.reasoning_tokens))
-        finally:
-            live.note_done(st)
-    return results
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_humaneval)
 
 
 def _sanitize_name(s: str) -> str:
@@ -401,6 +443,7 @@ def _save_report_md(
     tool_results: list[ScenarioResult] | None,
     ifeval_results: list[ScenarioResult] | None,
     gsm8k_results: list[ScenarioResult] | None,
+    gpqa_results: list[ScenarioResult] | None,
     humaneval_results: list[ScenarioResult] | None,
     composite_score: float | None,
     total_duration_s: float = 0.0,
@@ -420,6 +463,7 @@ def _save_report_md(
     tool_acc = (sum(1 for r in tool_results if r.ok) / len(tool_results)) if tool_results else None
     ifeval_acc = (sum(1 for r in ifeval_results if r.ok) / len(ifeval_results)) if ifeval_results else None
     gsm8k_acc = (sum(1 for r in gsm8k_results if r.ok) / len(gsm8k_results)) if gsm8k_results else None
+    gpqa_acc = (sum(1 for r in gpqa_results if r.ok) / len(gpqa_results)) if gpqa_results else None
     he_acc = (sum(1 for r in humaneval_results if r.ok) / len(humaneval_results)) if humaneval_results else None
 
     lines = [
@@ -439,6 +483,7 @@ def _save_report_md(
         f"tool_call_accuracy: {tool_acc:.4f}" if tool_acc is not None else "tool_call_accuracy: null",
         f"ifeval_accuracy: {ifeval_acc:.4f}" if ifeval_acc is not None else "ifeval_accuracy: null",
         f"gsm8k_accuracy: {gsm8k_acc:.4f}" if gsm8k_acc is not None else "gsm8k_accuracy: null",
+        f"gpqa_accuracy: {gpqa_acc:.4f}" if gpqa_acc is not None else "gpqa_accuracy: null",
         f"humaneval_accuracy: {he_acc:.4f}" if he_acc is not None else "humaneval_accuracy: null",
         f"reasoning_ratio: {ratio:.4f}",
         "---",
@@ -477,7 +522,7 @@ def _save_report_md(
     if tool_results:
         t_tot = len(tool_results)
         t_cor = sum(1 for r in tool_results if r.ok)
-        sp = [r for r in tool_results if r.category in ("simple", "parallel", "complex_args", "no_tool")]
+        sp = [r for r in tool_results if r.category in ("simple", "parallel", "complex_args", "no_tool", "distractor_tools")]
         sp_cor = sum(1 for r in sp if r.ok)
         ag = [r for r in tool_results if r.category in ("multi_turn", "error_recovery")]
         ag_cor = sum(1 for r in ag if r.ok)
@@ -488,12 +533,12 @@ def _save_report_md(
             "",
             "| Category | Accuracy | Correct / Total | Details |",
             "|---|---|---|---|",
-            f"| **Overall Tool Accuracy** | **`{(t_cor / t_tot) * 100:.1f}%`** | {t_cor} / {t_tot} | BFCL exact-match & tau-bench multi-turn |",
+            f"| **Overall Tool Accuracy** | **`{(t_cor / t_tot) * 100:.1f}%`** | {t_cor} / {t_tot} | BFCL exact-match, distractor selection & multi-turn |",
         ])
         if sp:
-            lines.append(f"| **Single-Turn (Simple / Parallel / Restraint / Complex)** | **`{(sp_cor / len(sp)) * 100:.1f}%`** | {sp_cor} / {len(sp)} | Tool selection, args, restraint & schemas |")
+            lines.append(f"| **Single-Turn (Simple / Parallel / Restraint / Complex / Distractors)** | **`{(sp_cor / len(sp)) * 100:.1f}%`** | {sp_cor} / {len(sp)} | Tool selection, args, restraint, distractors & schemas |")
         if ag:
-            lines.append(f"| **Agentic Multi-Turn (Execution & Error Recovery)** | **`{(ag_cor / len(ag)) * 100:.1f}%`** | {ag_cor} / {len(ag)} | Multi-step execution & error recovery |")
+            lines.append(f"| **Agentic Multi-Turn (Execution, Chains & Error Recovery)** | **`{(ag_cor / len(ag)) * 100:.1f}%`** | {ag_cor} / {len(ag)} | Multi-step dependency chains & stateful rollback |")
         lines.extend([
             "",
             f"**Failed Scenarios:** `{', '.join(failed_tools) if failed_tools else 'none'}`",
@@ -505,11 +550,11 @@ def _save_report_md(
         i_cor = sum(1 for r in ifeval_results if r.ok)
         failed_ifeval = [f"{r.id} ({r.detail})" for r in ifeval_results if not r.ok]
         lines.extend([
-            "## 📋 Instruction Following (Google IFEval)",
+            "## 📋 Instruction Following (Google IFEval Hard)",
             "",
             "| Benchmark | Accuracy | Correct / Total | Details |",
             "|---|---|---|---|",
-            f"| **IFEval Verifiable Constraints** | **`{(i_cor / i_tot) * 100:.1f}%`** | {i_cor} / {i_tot} | JSON schemas, negative constraints, word counts, formatting |",
+            f"| **IFEval Hard Constraints** | **`{(i_cor / i_tot) * 100:.1f}%`** | {i_cor} / {i_tot} | Multi-constraint conjunctions, JSON ranges, negative constraints |",
             "",
             f"**Failed Constraints:** `{', '.join(failed_ifeval) if failed_ifeval else 'none'}`",
             "",
@@ -520,13 +565,28 @@ def _save_report_md(
         g_cor = sum(1 for r in gsm8k_results if r.ok)
         failed_gsm8k = [f"{r.id} ({r.detail})" for r in gsm8k_results if not r.ok]
         lines.extend([
-            "## 🔢 Math Reasoning (GSM8K)",
+            "## 🔢 Math Reasoning (AIME & Competition Math)",
             "",
             "| Benchmark | Accuracy | Correct / Total | Details |",
             "|---|---|---|---|",
-            f"| **GSM8K Grade School Math** | **`{(g_cor / g_tot) * 100:.1f}%`** | {g_cor} / {g_tot} | Multi-step arithmetic word problem reasoning |",
+            f"| **AIME / Competition Math** | **`{(g_cor / g_tot) * 100:.1f}%`** | {g_cor} / {g_tot} | Modular arithmetic, combinatorics, algebra & geometry proofs |",
             "",
             f"**Failed Problems:** `{', '.join(failed_gsm8k) if failed_gsm8k else 'none'}`",
+            "",
+        ])
+
+    if gpqa_results:
+        gp_tot = len(gpqa_results)
+        gp_cor = sum(1 for r in gpqa_results if r.ok)
+        failed_gpqa = [f"{r.id} ({r.detail})" for r in gpqa_results if not r.ok]
+        lines.extend([
+            "## 🔬 PhD Science Reasoning (GPQA Diamond)",
+            "",
+            "| Benchmark | Accuracy | Correct / Total | Details |",
+            "|---|---|---|---|",
+            f"| **GPQA Diamond (Physics / Chem / Bio)** | **`{(gp_cor / gp_tot) * 100:.1f}%`** | {gp_cor} / {gp_tot} | Google-proof PhD-level deduction & domain reasoning |",
+            "",
+            f"**Failed Questions:** `{', '.join(failed_gpqa) if failed_gpqa else 'none'}`",
             "",
         ])
 
@@ -535,11 +595,11 @@ def _save_report_md(
         h_cor = sum(1 for r in humaneval_results if r.ok)
         failed_he = [f"{r.id} ({r.detail})" for r in humaneval_results if not r.ok]
         lines.extend([
-            "## 💻 Code Intelligence (HumanEval)",
+            "## 💻 Code Intelligence (HumanEval+ Data Structures)",
             "",
             "| Benchmark | Accuracy | Correct / Total | Details |",
             "|---|---|---|---|",
-            f"| **HumanEval Python Coding** | **`{(h_cor / h_tot) * 100:.1f}%`** | {h_cor} / {h_tot} | Functional Python generation with sandboxed test execution |",
+            f"| **HumanEval+ Code & Data Structures** | **`{(h_cor / h_tot) * 100:.1f}%`** | {h_cor} / {h_tot} | LRUCache, MinStack, Trie, interval merging with test execution |",
             "",
             f"**Failed Unit Tests:** `{', '.join(failed_he) if failed_he else 'none'}`",
             "",
@@ -575,6 +635,8 @@ def _save_report_md(
         lines.append(f"METRIC ifeval_accuracy={ifeval_acc:.4f}")
     if gsm8k_acc is not None:
         lines.append(f"METRIC gsm8k_accuracy={gsm8k_acc:.4f}")
+    if gpqa_acc is not None:
+        lines.append(f"METRIC gpqa_accuracy={gpqa_acc:.4f}")
     if he_acc is not None:
         lines.append(f"METRIC humaneval_accuracy={he_acc:.4f}")
     lines.extend([
@@ -677,32 +739,33 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
     )[:3]
 
     print()
-    print("=" * 115)
-    print("🏆 Top 3 Smartest Models (Composite Intelligence Score)")
-    print("=" * 115)
-    print(f" {'#':<3} {'Model':<24} {'Engine':<12} {'Device':<12} {'Composite':<11} {'Tool Acc':<10} {'IFEval':<9} {'GSM8K':<9} {'HumanEval':<10}")
-    print(f" {'-':<3} {'-'*24:<24} {'-'*12:<12} {'-'*12:<12} {'-'*11:<11} {'-'*10:<10} {'-'*9:<9} {'-'*9:<9} {'-'*10:<10}")
+    print("=" * 125)
+    print("🏆 Top 3 Smartest Models (Composite Intelligence Score: Tool, IFEval, AIME Math, GPQA, HumanEval+)")
+    print("=" * 125)
+    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Composite':<11} {'Tool Acc':<10} {'IFEval':<9} {'AIME':<8} {'GPQA':<8} {'HumanEval+':<11}")
+    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*11:<11} {'-'*10:<10} {'-'*9:<9} {'-'*8:<8} {'-'*8:<8} {'-'*11:<11}")
     for i, m in enumerate(smartest, 1):
-        model_str = str(m.get("model", "unknown"))[:24]
-        eng_str = str(m.get("engine", "unknown"))[:12]
+        model_str = str(m.get("model", "unknown"))[:22]
+        eng_str = str(m.get("engine", "unknown"))[:10]
         dev_str = str(m.get("device", "unknown"))[:12]
         raw_comp = m.get("smart_composite_score") if m.get("smart_composite_score") is not None else m.get("tool_call_accuracy")
         comp_val = f"{float(raw_comp) * 100:.1f}%" if raw_comp is not None else "N/A"
         tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
         ifeval_acc = f"{float(m['ifeval_accuracy']) * 100:.1f}%" if m.get("ifeval_accuracy") is not None else "N/A"
         gsm8k_acc = f"{float(m['gsm8k_accuracy']) * 100:.1f}%" if m.get("gsm8k_accuracy") is not None else "N/A"
+        gpqa_acc = f"{float(m['gpqa_accuracy']) * 100:.1f}%" if m.get("gpqa_accuracy") is not None else "N/A"
         he_acc = f"{float(m['humaneval_accuracy']) * 100:.1f}%" if m.get("humaneval_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<24} {eng_str:<12} {dev_str:<12} {comp_val:<11} {tool_acc:<10} {ifeval_acc:<9} {gsm8k_acc:<9} {he_acc:<10}")
+        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {comp_val:<11} {tool_acc:<10} {ifeval_acc:<9} {gsm8k_acc:<8} {gpqa_acc:<8} {he_acc:<11}")
 
     print()
-    print("=" * 115)
+    print("=" * 125)
     print("⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)")
-    print("=" * 115)
-    print(f" {'#':<3} {'Model':<24} {'Engine':<12} {'Device':<12} {'8-Conc t/s':<13} {'4-Conc t/s':<13} {'Single t/s':<13} {'Composite':<11} {'Tool Acc'}")
-    print(f" {'-':<3} {'-'*24:<24} {'-'*12:<12} {'-'*12:<12} {'-'*13:<13} {'-'*13:<13} {'-'*13:<13} {'-'*11:<11} {'-'*10}")
+    print("=" * 125)
+    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'8-Conc t/s':<13} {'4-Conc t/s':<13} {'Single t/s':<13} {'Composite':<11} {'Tool Acc'}")
+    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*13:<13} {'-'*13:<13} {'-'*13:<13} {'-'*11:<11} {'-'*10}")
     for i, m in enumerate(fastest, 1):
-        model_str = str(m.get("model", "unknown"))[:24]
-        eng_str = str(m.get("engine", "unknown"))[:12]
+        model_str = str(m.get("model", "unknown"))[:22]
+        eng_str = str(m.get("engine", "unknown"))[:10]
         dev_str = str(m.get("device", "unknown"))[:12]
         c8_val = m.get("conc8_tps") or m.get("tokens_per_second")
         c8_str = f"{float(c8_val):.1f} tok/s" if c8_val is not None else "N/A"
@@ -713,8 +776,8 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
         raw_comp = m.get("smart_composite_score") if m.get("smart_composite_score") is not None else m.get("tool_call_accuracy")
         comp_val = f"{float(raw_comp) * 100:.1f}%" if raw_comp is not None else "N/A"
         tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<24} {eng_str:<12} {dev_str:<12} {c8_str:<13} {c4_str:<13} {s_str:<13} {comp_val:<11} {tool_acc}")
-    print("=" * 115)
+        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {c8_str:<13} {c4_str:<13} {s_str:<13} {comp_val:<11} {tool_acc}")
+    print("=" * 125)
 
 
 def _report(
@@ -725,6 +788,7 @@ def _report(
     tool_results: list[ScenarioResult] | None,
     ifeval_results: list[ScenarioResult] | None,
     gsm8k_results: list[ScenarioResult] | None,
+    gpqa_results: list[ScenarioResult] | None,
     humaneval_results: list[ScenarioResult] | None,
     total_duration_s: float = 0.0,
     sweep_data: list | None = None,
@@ -765,21 +829,22 @@ def _report(
 
     # Accuracies
     tool_acc = (sum(1 for r in tool_results if r.ok) / len(tool_results)) if tool_results else None
-    sp_items = [r for r in tool_results if r.category in ("simple", "parallel", "complex_args", "no_tool")] if tool_results else []
+    sp_items = [r for r in tool_results if r.category in ("simple", "parallel", "complex_args", "no_tool", "distractor_tools")] if tool_results else []
     sp_acc = (sum(1 for r in sp_items if r.ok) / len(sp_items)) if sp_items else None
     ag_items = [r for r in tool_results if r.category in ("multi_turn", "error_recovery")] if tool_results else []
     ag_acc = (sum(1 for r in ag_items if r.ok) / len(ag_items)) if ag_items else None
 
     ifeval_acc = (sum(1 for r in ifeval_results if r.ok) / len(ifeval_results)) if ifeval_results else None
     gsm8k_acc = (sum(1 for r in gsm8k_results if r.ok) / len(gsm8k_results)) if gsm8k_results else None
+    gpqa_acc = (sum(1 for r in gpqa_results if r.ok) / len(gpqa_results)) if gpqa_results else None
     he_acc = (sum(1 for r in humaneval_results if r.ok) / len(humaneval_results)) if humaneval_results else None
 
     # Composite intelligence score (mean of all evaluated suites)
-    smart_scores = [a for a in (tool_acc, ifeval_acc, gsm8k_acc, he_acc) if a is not None]
+    smart_scores = [a for a in (tool_acc, ifeval_acc, gsm8k_acc, gpqa_acc, he_acc) if a is not None]
     composite_score = (sum(smart_scores) / len(smart_scores)) if smart_scores else None
 
     # Reasoning ratio across all runs
-    all_eval_scenarios = (tool_results or []) + (ifeval_results or []) + (gsm8k_results or []) + (humaneval_results or [])
+    all_eval_scenarios = (tool_results or []) + (ifeval_results or []) + (gsm8k_results or []) + (gpqa_results or []) + (humaneval_results or [])
     c_tok_total = sum(tok_sum(results) for results, _ in conc4_reps) + sum(tok_sum(results) for results, _ in conc8_reps)
     c_reas_total = sum(reas_sum(results) for results, _ in conc4_reps) + sum(reas_sum(results) for results, _ in conc8_reps)
     all_tok = s_tok + c_tok_total + sum(r.completion_tokens for r in all_eval_scenarios)
@@ -818,13 +883,16 @@ def _report(
             print(f"  agentic multi-turn     : {ag_acc * 100:.1f}%")
     if ifeval_acc is not None:
         i_cor = sum(1 for r in ifeval_results if r.ok)
-        print(f"IFEval (Instructions)    : {i_cor}/{len(ifeval_results)} = {ifeval_acc * 100:.1f}%")
+        print(f"IFEval (Hard Rules)      : {i_cor}/{len(ifeval_results)} = {ifeval_acc * 100:.1f}%")
     if gsm8k_acc is not None:
         g_cor = sum(1 for r in gsm8k_results if r.ok)
-        print(f"GSM8K (Math Reasoning)   : {g_cor}/{len(gsm8k_results)} = {gsm8k_acc * 100:.1f}%")
+        print(f"AIME / Competition Math  : {g_cor}/{len(gsm8k_results)} = {gsm8k_acc * 100:.1f}%")
+    if gpqa_acc is not None:
+        gp_cor = sum(1 for r in gpqa_results if r.ok)
+        print(f"GPQA Diamond (Science)   : {gp_cor}/{len(gpqa_results)} = {gpqa_acc * 100:.1f}%")
     if he_acc is not None:
         h_cor = sum(1 for r in humaneval_results if r.ok)
-        print(f"HumanEval (Coding)       : {h_cor}/{len(humaneval_results)} = {he_acc * 100:.1f}%")
+        print(f"HumanEval+ (Data Struct) : {h_cor}/{len(humaneval_results)} = {he_acc * 100:.1f}%")
 
     # Failures list
     all_failed = [r.id for r in all_eval_scenarios if not r.ok]
@@ -855,6 +923,7 @@ def _report(
             tool_results,
             ifeval_results,
             gsm8k_results,
+            gpqa_results,
             humaneval_results,
             composite_score,
             total_duration_s,
@@ -880,6 +949,8 @@ def _report(
         print(f"METRIC ifeval_accuracy={ifeval_acc:.4f}")
     if gsm8k_acc is not None:
         print(f"METRIC gsm8k_accuracy={gsm8k_acc:.4f}")
+    if gpqa_acc is not None:
+        print(f"METRIC gpqa_accuracy={gpqa_acc:.4f}")
     if he_acc is not None:
         print(f"METRIC humaneval_accuracy={he_acc:.4f}")
     print(f"METRIC reasoning_ratio={ratio:.4f}")
@@ -970,8 +1041,12 @@ async def _main(cfg: Config) -> int:
             ifeval_results = await _run_ifeval(client, tracker, live, cfg)
 
         gsm8k_results = None
-        if cfg.should_eval("gsm8k"):
+        if cfg.should_eval("gsm8k") or cfg.should_eval("aime"):
             gsm8k_results = await _run_gsm8k(client, tracker, live, cfg)
+
+        gpqa_results = None
+        if cfg.should_eval("gpqa"):
+            gpqa_results = await _run_gpqa(client, tracker, live, cfg)
 
         humaneval_results = None
         if cfg.should_eval("humaneval"):
@@ -982,13 +1057,13 @@ async def _main(cfg: Config) -> int:
         live.stop()
         await client.aclose()
     total_duration_s = time.monotonic() - t_start
-    return _report(cfg, single, conc4_reps, conc8_reps, tool_results, ifeval_results, gsm8k_results, humaneval_results, total_duration_s, sweep_data)
+    return _report(cfg, single, conc4_reps, conc8_reps, tool_results, ifeval_results, gsm8k_results, gpqa_results, humaneval_results, total_duration_s, sweep_data)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="tool-eval-bench",
-        description="t/s (1x, 4x, 8x) + intelligence benchmark (Tool Calling, IFEval, GSM8K, HumanEval) for OpenAI-compatible endpoints",
+        description="t/s (1x, 4x, 8x) + frontier intelligence benchmark (BFCL, tau-bench, IFEval Hard, AIME Math, GPQA Diamond, HumanEval+) for OpenAI-compatible endpoints",
     )
     parser.add_argument("--base-url", default=None, help="endpoint URL (default: BENCH_BASE_URL, else http://192.168.1.5:8888)")
     parser.add_argument("--api-key", default=None, help="bearer token for endpoints that require auth (default: BENCH_API_KEY)")
@@ -996,7 +1071,7 @@ def main() -> int:
     parser.add_argument("--results-dir", default=None, help="directory to store result markdown files (default: results)")
     parser.add_argument("--engine", default=None, help="serving engine name/override (default: auto-detect e.g. vLLM, SGLang, llama.cpp)")
     parser.add_argument("--model", default=None, help="model id (default: auto-detect from /v1/models)")
-    parser.add_argument("--eval", dest="eval_suites", default=None, help="evaluation suites to run: all (default) or comma-separated e.g. tool,ifeval,gsm8k,humaneval")
+    parser.add_argument("--eval", dest="eval_suites", default=None, help="evaluation suites to run: all (default) or comma-separated e.g. tool,ifeval,gsm8k,gpqa,humaneval")
     parser.add_argument("--concurrency", type=int, default=None, help="concurrency tier for primary metric (default 8)")
     parser.add_argument("--max-tokens", type=int, default=None, help="output-token cap for throughput prompts (default 2048)")
     parser.add_argument("--tool-max-tokens", type=int, default=None, help="output-token cap per eval problem/turn (default 1536)")

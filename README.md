@@ -1,6 +1,6 @@
-# Agentic & Intelligence Benchmark — Throughput + Tool Calling + IFEval + GSM8K + HumanEval
+# Agentic & Frontier Intelligence Benchmark — Throughput (1x, 4x, 8x) + Tool Calling + IFEval Hard + AIME Math + GPQA Diamond + HumanEval+
 
-A benchmark harness for **any OpenAI-compatible API** (local, self-hosted, or remote). If your server exposes standard `/v1/chat/completions` and `/v1/models`, it works out of the box — including:
+A high-performance benchmark harness for **any OpenAI-compatible API** (local, self-hosted, or remote). If your server exposes standard `/v1/chat/completions` and `/v1/models`, it works out of the box — including:
 - **vLLM** & **SGLang** (Linux / GPU servers)
 - **MLX (`mlx-lm.server`)** (Apple Silicon native)
 - **llama.cpp / GGUF (`llama-server`)**
@@ -8,11 +8,12 @@ A benchmark harness for **any OpenAI-compatible API** (local, self-hosted, or re
 - **TGI**, **Aphrodite Engine**, **TensorRT-LLM**
 - **LiteLLM** proxies or authenticated cloud gateways
 
-Measures **generation throughput (tokens/sec)** at 1× and N-way concurrency, plus a comprehensive **Composite Intelligence Score** spanning:
-- **Tool Calling & Agentic Evaluation** (BFCL simple, parallel, complex schemas, no-tool restraint + $\tau$-bench multi-turn & error recovery)
-- **Instruction Following** (Google IFEval verifiable constraints)
-- **Multi-Step Math Reasoning** (GSM8K)
-- **Code Intelligence & Execution** (HumanEval with sandboxed Python test execution)
+Measures **3-Tier Generation Throughput (tokens/sec)** (`Single (1x)`, `4-Concurrent (4x)`, and `8-Concurrent (8x)`), plus a comprehensive **Composite Intelligence Score** spanning 5 frontier evaluation suites:
+1. **Tool Calling & Agentic Evaluation** (BFCL simple, parallel, complex schemas, distractor tools, no-tool restraint + $\tau$-bench / GAIA Level 2 multi-turn 4-step dependency chains & stateful rollback)
+2. **Instruction Following** (Google IFEval Hard with 3–4 simultaneous negative/structural/format orthogonal constraints)
+3. **Competition Math Reasoning** (AIME 2024/2025 & Olympiad math with 10+ step deductive reasoning and exact integer answers)
+4. **PhD-Level Science Reasoning** (GPQA Diamond Google-proof multiple-choice questions in Physics, Organic Chemistry, Molecular Biology, and Thermodynamics)
+5. **Code Intelligence & Execution** (HumanEval+ and LeetCode Stateful Data Structures — `LRUCache`, `MinStack`, `Trie`, `IntervalMerger` with sandboxed Python test execution)
 
 Python + `uv`. Deterministic, offline workload with **live streamed thinking traces**.
 
@@ -24,8 +25,8 @@ Python + `uv`. Deterministic, offline workload with **live streamed thinking tra
 # 1. Install dependencies (creates .venv, resolves uv.lock)
 uv sync
 
-# 2. Run the full benchmark (defaults: single-stream + 8-concurrency, thinking on,
-#    model auto-detected from the endpoint)
+# 2. Run the full benchmark (defaults: single + 4x + 8x throughput, thinking on,
+#    model & engine auto-detected from the endpoint)
 ./tool-eval-bench --seed 42 --base-url http://192.168.1.5:8888
 #    equivalent: uv run --frozen python -m benchmark.main
 
@@ -36,7 +37,7 @@ uv sync
 
 Default target: `http://192.168.1.5:8888`. Both the **model** and the **serving engine** (vLLM, SGLang, MLX, llama.cpp / GGUF, Ollama, LM Studio, TGI, etc.) are **auto-detected** from the endpoint; override with `--model` / `--engine` (or `BENCH_MODEL` / `BENCH_ENGINE`). Hardware device label defaults to `DGX-Spark` on Linux and auto-detects your Apple chip (e.g. `M4-Max`, `M3-Pro`) on macOS.
 
-Typical run: ~3–4 minutes (Single 1×, 4-concurrent, and 8-concurrent throughput rounds, plus intelligence suites).
+Typical run: ~3–4 minutes for full throughput (Single, 4x, 8x) and all 5 intelligence suites.
 
 ### Useful variants
 
@@ -51,11 +52,12 @@ Typical run: ~3–4 minutes (Single 1×, 4-concurrent, and 8-concurrent throughp
 # Fast mode: disable reasoning + tool-use system prompt → ~9× lower latency, same accuracy
 ./tool-eval-bench --no-thinking --system-prompt "You are a helpful assistant with access to tools. When the user asks for data you cannot know from training (weather, prices, flights, products), you MUST call the matching tool. Never say you cannot provide real-time data — call the tool instead."
 
-# Run specific intelligence suites (e.g. only tools + math, or coding only)
-./tool-eval-bench --eval tool,gsm8k
-./tool-eval-bench --eval humaneval
+# Run specific intelligence suites (e.g. only tools + science, or coding only)
+./tool-eval-bench --eval tool,gpqa
+./tool-eval-bench --eval gsm8k,humaneval
+./tool-eval-bench --eval ifeval
 
-# Concurrency scaling curve (1/2/4/8/16 streams) — shows GPU headroom beyond 4
+# Concurrency scaling curve (1/2/4/8/16 streams) — shows GPU headroom
 ./tool-eval-bench --sweep
 
 # Quick sanity run (2 scenarios, small token budget, skip saving report to disk)
@@ -75,10 +77,11 @@ Typical run: ~3–4 minutes (Single 1×, 4-concurrent, and 8-concurrent throughp
 | `--results-dir` | `BENCH_RESULTS_DIR` → `results` | directory where report `.md` files are saved |
 | `--engine` | auto-detect (vLLM, SGLang, llama.cpp, Ollama, etc.) | serving engine name/override |
 | `--model` | auto-detect from `/v1/models` | model id |
-| `--eval` | `all` | evaluation suites: `all` or comma-separated (`tool,ifeval,gsm8k,humaneval`) |
-| `--concurrency` | 8 | concurrent streams |
-| `--tool-max-tokens` | 1536 | per-tool-turn cap |
-| `--scenarios` | 0 (all) | scenario limit |
+| `--eval` | `all` | evaluation suites: `all` or comma-separated (`tool,ifeval,gsm8k,gpqa,humaneval`) |
+| `--concurrency` | 8 | concurrent streams for primary tier |
+| `--max-tokens` | 2048 | throughput generation token cap |
+| `--tool-max-tokens` | 1536 | per-turn intelligence suite token cap |
+| `--scenarios` | 0 (all) | scenario limit per suite |
 | `--repeats` | 3 | concurrent rounds; median reported |
 | `--seed` | 42 | harness RNG seed (workload is fixed at temperature 0) |
 | `--thinking` / `--no-thinking` | on | reasoning toggle |
@@ -100,17 +103,19 @@ Precedence: CLI flags → `BENCH_*` env vars → defaults.
 | `BENCH_DEVICE` | `DGX-Spark` | device/GPU label for result filenames |
 | `BENCH_RESULTS_DIR` | `results` | directory to save benchmark `.md` reports |
 | `BENCH_MODEL` | (auto-detect) | model id; unset → first model from `GET /v1/models` |
-| `BENCH_EVAL` | `all` | active eval suites: `all` or comma-separated (`tool,ifeval,gsm8k,humaneval`) |
+| `BENCH_ENGINE` | (auto-detect) | engine name (vLLM, SGLang, MLX, llama.cpp, etc.) |
+| `BENCH_EVAL` | `all` | active eval suites: `all` or comma-separated (`tool,ifeval,gsm8k,gpqa,humaneval`) |
 | `BENCH_CONCURRENCY` | `8` | concurrent streams for the headline throughput metric |
-| `BENCH_TOOL_MAX_TOKENS` | `1536` | output-token cap per tool-call turn |
-| `BENCH_SCENARIOS` | `0` (= all) | limit number of tool-call scenarios |
+| `BENCH_MAX_TOKENS` | `2048` | throughput generation token cap |
+| `BENCH_TOOL_MAX_TOKENS` | `1536` | output-token cap per intelligence test problem/turn |
+| `BENCH_SCENARIOS` | `0` (= all) | limit number of scenarios per suite |
 | `BENCH_REPEATS` | `3` | concurrent-throughput rounds; the median is reported (stability) |
 | `BENCH_ENABLE_THINKING` | `true` | pass `chat_template_kwargs={"enable_thinking": …}` (Nemotron toggle) |
 | `BENCH_SYSTEM_PROMPT` | (none) | prepended system message to every request |
 | `BENCH_SWEEP` | `off` | also report the 1/2/4/8/16 concurrency scaling curve |
 | `BENCH_SEED` | `42` | harness RNG seed (workload is fixed at temperature 0) |
 | `BENCH_NO_RECORD` | `off` | do not save result report to `results/` markdown file |
-| temperature | `0.0` | fixed (deterministic workload) |
+| `temperature` | `0.0` | fixed (deterministic workload) |
 
 ---
 
@@ -126,74 +131,79 @@ human-readable summary is printed above them.
 | `conc4_tps` | 4-concurrent throughput |
 | `single_stream_tps` | single-stream (1×) throughput |
 | `time_to_first_token_ms` | mean TTFT across concurrent rounds |
-| `smart_composite_score` | **composite intelligence score** — average accuracy across all evaluated intelligence suites |
-| `tool_call_accuracy` | tool calling accuracy (BFCL exact-match, restraint & tau-bench multi-turn) |
-| `ifeval_accuracy` | instruction following accuracy (Google IFEval verifiable constraints) |
-| `gsm8k_accuracy` | grade school math multi-step reasoning accuracy (GSM8K) |
-| `humaneval_accuracy` | Python functional code generation accuracy with unit test execution (HumanEval) |
+| `total_duration_seconds` | total benchmark execution time |
+| `smart_composite_score` | **composite intelligence score** — unweighted average accuracy across all evaluated suites |
+| `tool_call_accuracy` | tool calling accuracy (BFCL exact-match, distractor selection & tau-bench / GAIA multi-turn) |
+| `ifeval_accuracy` | instruction following accuracy (Google IFEval Hard multi-constraint conjunctions) |
+| `gsm8k_accuracy` | competition math reasoning accuracy (AIME 2024/2025 & Olympiad math) |
+| `gpqa_accuracy` | PhD-level science reasoning accuracy (GPQA Diamond Physics/Chem/Bio) |
+| `humaneval_accuracy` | Python functional code & data structures accuracy with unit test execution (HumanEval+) |
 | `reasoning_ratio` | reasoning tokens / total output tokens |
+
+---
+
 ## Results & Leaderboard
 
 After each benchmark run:
 1. **Result Markdown File**: Automatically saved to `results/<device>-<model>.md` (e.g. `results/DGX-Spark-Nemo-3.5-Lightning.md`). Each file contains structured YAML frontmatter, detailed performance tables, tool accuracy breakdown, and CI metrics.
 2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings comparing models and engines side-by-side:
-   - **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score)
+   - **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score across all 5 suites)
    - **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single)
 
 ```
-===================================================================================================================
-🏆 Top 3 Smartest Models (Composite Intelligence Score)
-===================================================================================================================
- #   Model                    Engine       Device       Composite   Tool Acc   IFEval    GSM8K     HumanEval 
- -   ------------------------ ------------ ------------ ----------- ---------- --------- --------- ----------
- 1   ornith-1.5-35b-a3b-nvfp4 vLLM         DGX-Spark    75.0%       100.0%     100.0%    100.0%    0.0%      
- 2   Nemo-3.5-Lightning       SGLang       DGX-Spark    70.0%       70.0%      N/A       N/A       N/A       
+=============================================================================================================================
+🏆 Top 3 Smartest Models (Composite Intelligence Score: Tool, IFEval, AIME Math, GPQA, HumanEval+)
+=============================================================================================================================
+ #   Model                  Engine     Device       Composite   Tool Acc   IFEval    AIME     GPQA     HumanEval+ 
+ -   ---------------------- ---------- ------------ ----------- ---------- --------- -------- -------- -----------
+ 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    70.0%       70.0%      N/A       N/A      N/A      N/A        
+ 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    0.0%        N/A        N/A       N/A      0.0%     N/A        
 
-===================================================================================================================
+=============================================================================================================================
 ⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
-===================================================================================================================
- #   Model                    Engine       Device       8-Conc t/s    4-Conc t/s    Single t/s    Composite   Tool Acc
- -   ------------------------ ------------ ------------ ------------- ------------- ------------- ----------- ----------
- 1   Nemo-3.5-Lightning       SGLang       DGX-Spark    196.1 tok/s   137.6 tok/s   61.5 tok/s    70.0%       70.0%
- 2   ornith-1.5-35b-a3b-nvfp4 vLLM         DGX-Spark    146.8 tok/s   78.7 tok/s    34.4 tok/s    75.0%       100.0%
-===================================================================================================================
+=============================================================================================================================
+ #   Model                  Engine     Device       8-Conc t/s    4-Conc t/s    Single t/s    Composite   Tool Acc
+ -   ---------------------- ---------- ------------ ------------- ------------- ------------- ----------- ----------
+ 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    196.1 tok/s   137.6 tok/s   61.5 tok/s    70.0%       70.0%
+ 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    146.6 tok/s   76.7 tok/s    34.2 tok/s    0.0%        N/A
+=============================================================================================================================
 ```
 
-
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
+
+---
+
 ## Live output
 
 On a TTY, `rich` renders:
+- **header panel** — model, serving engine, endpoint, thinking mode, temperature, seed;
+- **live request table** — per request: phase, status, TTFT, reasoning tokens (live character count), answer tokens, tokens/sec, tool calls; windowed with scrolling summary to fit any terminal size;
+- **live trace panel** — the currently streaming request's reasoning, then its answer and `[TOOL] name({"arg": …})` calls as they are emitted in real time.
 
-- header panel — model, endpoint, thinking mode, temperature;
-- a table — per request: phase, status, TTFT, reasoning tokens (live char count), answer
-  tokens, tokens/sec, tool calls;
-- a live trace panel — the currently streaming request's reasoning, then its answer and
-  `[TOOL] name({"arg": …})` calls as they are emitted.
-
-Non-TTY (captured) runs emit one concise `[done] …` line per request on stderr; stdout stays
-clean for `METRIC` parsing.
+Non-TTY (captured / CI) runs emit one concise `[done] …` line per request on stderr; stdout stays clean for `METRIC` parsing.
 
 ---
 
 ## Benchmark design & provenance
 
-- **Tool Calling & Agentic Evaluation** — modeled on the **Berkeley Function Calling Leaderboard (BFCL)** and **$\tau$-bench / GAIA**:
-  - `simple` (8): single-call tool selection and argument extraction.
-  - `parallel` (6): multi-tool calls in a single response turn.
-  - `multi_turn` (6): multi-step execution loop against a deterministic sandbox.
-  - `no_tool` (4): general knowledge / creative questions with tools present; tests tool hallucination restraint.
-  - `error_recovery` (2): tool returns errors/not-found; tests if model self-corrects and adapts parameters.
-  - `complex_args` (1): nested JSON arrays and objects with type validation.
-- **Instruction Following (Google IFEval)** — deterministic verification of hard constraints:
-  - Strict JSON schema adherence with nested type & key constraints.
-  - Negative constraints (e.g. zero commas, forbidden words).
-  - Keyword frequency requirements and exact paragraph counts without bullets.
-  - Highlighting & tag wrappers (`<response>...</response>`, bold headers).
-- **Math Reasoning (GSM8K)** — canonical grade-school multi-step arithmetic word problems with exact integer answer verification (`#### X` / `\boxed{X}`).
-- **Code Intelligence (HumanEval)** — functional Python code generation executed inside a sandboxed Python subprocess against strict unit test assertions.
-- **Throughput** — **LLMPerf**-style synthetic generation measuring single-stream and N-way concurrent tokens/sec with code generation prompts.
-- **Determinism** — temperature 0, vendored fixtures, deterministic canned tool executor, sandboxed code execution, no live internet dependencies.
+1. **Tool Calling & Agentic Evaluation** — modeled on the **Berkeley Function Calling Leaderboard (BFCL)** and **$\tau$-bench / GAIA**:
+   - `simple` (8): single-call tool selection and argument extraction.
+   - `parallel` (6): multi-tool calls in a single response turn.
+   - `multi_turn` (6): multi-step execution loop against a deterministic sandbox.
+   - `distractor_tools` (2): supply 12+ distractor tools to test tool ambiguity and precision.
+   - `no_tool` (4): general knowledge / creative questions with tools present; tests tool hallucination restraint.
+   - `error_recovery` (2): tool returns errors/not-found; tests if model self-corrects, rolls back, and adapts parameters.
+   - `complex_args` (1): nested JSON arrays and objects with type validation.
+2. **Instruction Following (Google IFEval Hard)** — deterministic verification of hard constraints:
+   - Strict JSON schema adherence with nested type & key constraints.
+   - Negative constraints (zero commas, forbidden words, case constraints).
+   - Keyword frequency requirements and exact paragraph bounds without bullets.
+   - Markdown structure formatting and tag wrappers.
+3. **Competition Math Reasoning (AIME & Olympiad)** — 6 competition-level math problems with exact integer answers (`#### X` / `\boxed{X}`): modular arithmetic ($7^{2026} \pmod{100}$), Diophantine equations, digit sum combinatorics, and geometry.
+4. **PhD-Level Science Reasoning (GPQA Diamond)** — 6 Google-proof multiple-choice questions spanning Quantum Mechanics, Organic Chemistry, Molecular Biology (lac operon), and Statistical Mechanics.
+5. **Code Intelligence (HumanEval+ & LeetCode Data Structures)** — Python class & data structure generation (`LRUCache`, `MinStack`, `Trie`, `IntervalMerger`, palindrome partitions) executed in a sandboxed Python subprocess against comprehensive test assertions.
+6. **3-Tier Throughput (1x, 4x, 8x)** — **LLMPerf**-style synthetic generation measuring single-stream and concurrent tokens/sec with code generation prompts.
+7. **Determinism** — temperature 0, vendored fixtures, deterministic tool executor, sandboxed code execution, zero live internet dependencies.
 
 ### File layout
 
@@ -205,41 +215,11 @@ benchmark/
   main.py                # orchestrator, metrics, leaderboard, METRIC output
   sglang_client.py       # async SSE client (reasoning_content + tool-call fragments + usage)
   scenarios.py           # vendored tool scenarios, tool schemas, deterministic executor, throughput prompts
-  grade.py               # BFCL-style call match + τ-bench-style outcome grading
-  live.py                # rich live panel / concise non-TTY logs
+  grade.py               # BFCL / IFEval / AIME / GPQA / HumanEval grading routines
+  live.py                # rich live panel / windowed table / concise non-TTY logs
 ```
 
 ---
-
-## Measured results (Nemo-3.5-Lightning, SGLang @ 192.168.1.5:8888)
-
-| Measurement | Value |
-|---|---|
-| single-stream t/s | ~56–63 |
-| 4-concurrent t/s (median-of-3) | ~131–148 |
-| 16-concurrent t/s (sweep) | ~280–317 |
-| TTFT (4-concurrent) | ~230 ms |
-| reasoning ratio | ~0.64–0.78 |
-| tool-call accuracy | 0.70 (14/20) — simple 8/8, parallel 0/6, multi-turn 6/6 |
-| agentic (multi-turn) accuracy | 1.00 |
-
-### Key findings
-
-1. **The GPU is not saturated at 4 concurrency.** Throughput scales ~linearly with streams
-   (1→62, 2→93, 4→142, 8→196, 16→280 t/s) — memory-bandwidth-bound decode. The 4-concurrency
-   spec is a workload choice, not a hardware ceiling: ~2× more t/s is available at 16 streams.
-2. **Parallel tool calls are a hard limitation of this model.** It reasons *"call twice"* but
-   emits exactly one tool call per turn — confirmed with cross-tool requests, explicit
-   "call twice" instructions, and `tool_choice="required"`. Fixing it requires a server-side
-   change (e.g. SGLang `--tool-call-parser`), not a prompt change. This alone caps accuracy at 0.70.
-3. **Reasoning length is highly stochastic** (2× spread even for identical prompts).
-   Open-ended "explain/summarize" prompts stochastically hit the 2048-token cap; the bundled
-   code-generation prompts keep it bounded (~700–1200 tokens, `finish=stop`).
-4. **Fast mode**: `enable_thinking=false` is ~9× faster to answer but tool calling becomes
-   unreliable *without* a system prompt; with the tool-use prompt above it is reliable at the
-   same 0.70 accuracy. Raw t/s drops (~78 at 4-conc, short bursts under-saturate the GPU).
-5. **Measurement stability**: single-sample t/s swings ±7% (127–143). Median-of-3
-   (`BENCH_REPEATS=3`) narrows it to ~±3%.
 
 ## Requirements
 
