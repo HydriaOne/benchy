@@ -472,6 +472,7 @@ def _save_report_md(
         f'device: "{cfg.device}"',
         f'engine: "{cfg.engine or "auto"}"',
         f'endpoint: "{cfg.base_url}"',
+        f'thinking: "{"on" if cfg.enable_thinking else "off"}"',
         f'date: "{date_iso}"',
         f"tokens_per_second: {conc8_tps:.3f}",
         f"conc8_tps: {conc8_tps:.3f}",
@@ -674,7 +675,24 @@ def _parse_frontmatter(content: str) -> dict | None:
                     data[key] = int(val)
             except ValueError:
                 data[key] = val
+    if "thinking" not in data:
+        if "- **Thinking Mode:** `off`" in content:
+            data["thinking"] = "off"
+        elif "- **Thinking Mode:** `on`" in content:
+            data["thinking"] = "on"
     return data
+
+
+def _format_thinking(m: dict) -> str:
+    raw = m.get("thinking")
+    if raw is None:
+        return "N/A"
+    s = str(raw).strip().lower()
+    if s in ("on", "true", "yes", "1"):
+        return "on"
+    if s in ("off", "false", "no", "0"):
+        return "off"
+    return s[:9]
 
 
 def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
@@ -698,12 +716,13 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
     if not entries:
         return
 
-    # Deduplicate by (model, device) keeping the entry with highest composite score or tool_call_accuracy
-    unique: dict[tuple[str, str], dict] = {}
+    # Deduplicate by (model, device, thinking) keeping the entry with highest composite score or tool_call_accuracy
+    unique: dict[tuple[str, str, str], dict] = {}
     for e in entries:
         m_name = str(e.get("model") or "")
         d_name = str(e.get("device") or "")
-        key = (m_name, d_name)
+        th_name = _format_thinking(e)
+        key = (m_name, d_name, th_name)
         if key not in unique:
             unique[key] = e
         else:
@@ -742,12 +761,13 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
     print("=" * 125)
     print("🏆 Top 3 Smartest Models (Composite Intelligence Score: Tool, IFEval, AIME Math, GPQA, HumanEval+)")
     print("=" * 125)
-    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Composite':<11} {'Tool Acc':<10} {'IFEval':<9} {'AIME':<8} {'GPQA':<8} {'HumanEval+':<11}")
-    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*11:<11} {'-'*10:<10} {'-'*9:<9} {'-'*8:<8} {'-'*8:<8} {'-'*11:<11}")
+    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Composite':<11} {'Tool Acc':<10} {'IFEval':<9} {'AIME':<8} {'GPQA':<8} {'HumanEval+':<11} {'Thinking'}")
+    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*11:<11} {'-'*10:<10} {'-'*9:<9} {'-'*8:<8} {'-'*8:<8} {'-'*11:<11} {'-'*8}")
     for i, m in enumerate(smartest, 1):
         model_str = str(m.get("model", "unknown"))[:22]
         eng_str = str(m.get("engine", "unknown"))[:10]
         dev_str = str(m.get("device", "unknown"))[:12]
+        th_str = _format_thinking(m)
         raw_comp = m.get("smart_composite_score") if m.get("smart_composite_score") is not None else m.get("tool_call_accuracy")
         comp_val = f"{float(raw_comp) * 100:.1f}%" if raw_comp is not None else "N/A"
         tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
@@ -755,18 +775,18 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
         gsm8k_acc = f"{float(m['gsm8k_accuracy']) * 100:.1f}%" if m.get("gsm8k_accuracy") is not None else "N/A"
         gpqa_acc = f"{float(m['gpqa_accuracy']) * 100:.1f}%" if m.get("gpqa_accuracy") is not None else "N/A"
         he_acc = f"{float(m['humaneval_accuracy']) * 100:.1f}%" if m.get("humaneval_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {comp_val:<11} {tool_acc:<10} {ifeval_acc:<9} {gsm8k_acc:<8} {gpqa_acc:<8} {he_acc:<11}")
-
+        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {comp_val:<11} {tool_acc:<10} {ifeval_acc:<9} {gsm8k_acc:<8} {gpqa_acc:<8} {he_acc:<11} {th_str}")
     print()
     print("=" * 125)
     print("⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)")
     print("=" * 125)
-    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'8-Conc t/s':<13} {'4-Conc t/s':<13} {'Single t/s':<13} {'Composite':<11} {'Tool Acc'}")
-    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*13:<13} {'-'*13:<13} {'-'*13:<13} {'-'*11:<11} {'-'*10}")
+    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'8-Conc t/s':<13} {'4-Conc t/s':<13} {'Single t/s':<13} {'Composite':<11} {'Tool Acc':<10} {'Thinking'}")
+    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*13:<13} {'-'*13:<13} {'-'*13:<13} {'-'*11:<11} {'-'*10:<10} {'-'*8}")
     for i, m in enumerate(fastest, 1):
         model_str = str(m.get("model", "unknown"))[:22]
         eng_str = str(m.get("engine", "unknown"))[:10]
         dev_str = str(m.get("device", "unknown"))[:12]
+        th_str = _format_thinking(m)
         c8_val = m.get("conc8_tps") or m.get("tokens_per_second")
         c8_str = f"{float(c8_val):.1f} tok/s" if c8_val is not None else "N/A"
         c4_val = m.get("conc4_tps")
@@ -776,7 +796,7 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
         raw_comp = m.get("smart_composite_score") if m.get("smart_composite_score") is not None else m.get("tool_call_accuracy")
         comp_val = f"{float(raw_comp) * 100:.1f}%" if raw_comp is not None else "N/A"
         tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {c8_str:<13} {c4_str:<13} {s_str:<13} {comp_val:<11} {tool_acc}")
+        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {c8_str:<13} {c4_str:<13} {s_str:<13} {comp_val:<11} {tool_acc:<10} {th_str}")
     print("=" * 125)
 
 

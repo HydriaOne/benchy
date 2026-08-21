@@ -4,31 +4,31 @@ device: "DGX-Spark"
 engine: "vLLM"
 endpoint: "http://192.168.1.5:8888"
 thinking: "on"
-date: "2026-08-21T11:18:06.873565+00:00"
-tokens_per_second: 264.459
-conc8_tps: 264.459
-conc4_tps: 171.901
-single_stream_tps: 94.393
-time_to_first_token_ms: 6419.533
-total_duration_seconds: 306.929
+date: "2026-08-20T16:20:32.773060+00:00"
+tokens_per_second: 112.965
+conc8_tps: 112.965
+conc4_tps: 69.094
+single_stream_tps: 35.690
+time_to_first_token_ms: 14655.041
+total_duration_seconds: 736.285
 smart_composite_score: 0.7473
 tool_call_accuracy: 0.9032
-ifeval_accuracy: 0.6667
+ifeval_accuracy: 0.5000
 gsm8k_accuracy: 0.6667
-gpqa_accuracy: 0.5000
+gpqa_accuracy: 0.6667
 humaneval_accuracy: 1.0000
 reasoning_ratio: 0.0000
 ---
 
 # Benchmark Report: ornith-1.5-35b-a3b-nvfp4 on DGX-Spark
 
-- **Date:** 2026-08-21 11:18:06 UTC
+- **Date:** 2026-08-20 16:20:32 UTC
 - **Device / GPU:** `DGX-Spark`
 - **Serving Engine:** `vLLM`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `ornith-1.5-35b-a3b-nvfp4`
 - **Thinking Mode:** `on`
-- **Total Execution Time:** **`5m 6.9s`** (306.9s)
+- **Total Execution Time:** **`12m 16.3s`** (736.3s)
 - **Concurrency Tiers:** `Single (1x)`, `4-Concurrent`, `8-Concurrent` (repeats: `3`)
 - **Seed:** `42`
 - **🧠 Composite Intelligence Score:** **`74.7%`**
@@ -37,11 +37,11 @@ reasoning_ratio: 0.0000
 
 | Metric | Value | Details |
 |---|---|---|
-| **8-Concurrent Throughput** | **`264.46 tok/s`** | median of 3 reps (spread: 259.8–273.1 tok/s) |
-| **4-Concurrent Throughput** | **`171.90 tok/s`** | median of 3 reps (spread: 169.9–173.1 tok/s) |
-| **Single-Stream Throughput** | **`94.39 tok/s`** | 2699 tokens generated |
-| **Mean TTFT (8-Concurrent)** | **`6419.5 ms`** | time to first token |
-| **Total Execution Time** | **`5m 6.9s`** | total benchmark wall-clock time (306.9s) |
+| **8-Concurrent Throughput** | **`112.97 tok/s`** | median of 3 reps (spread: 108.7–119.4 tok/s) |
+| **4-Concurrent Throughput** | **`69.09 tok/s`** | median of 3 reps (spread: 69.1–72.0 tok/s) |
+| **Single-Stream Throughput** | **`35.69 tok/s`** | 2778 tokens generated |
+| **Mean TTFT (8-Concurrent)** | **`14655.0 ms`** | time to first token |
+| **Total Execution Time** | **`12m 16.3s`** | total benchmark wall-clock time (736.3s) |
 | **Reasoning Ratio** | **`0.000`** | 0.0% of generated tokens spent reasoning |
 
 ## 🛠️ Tool-Calling & Agentic Evaluation (BFCL & tau-bench)
@@ -58,9 +58,9 @@ reasoning_ratio: 0.0000
 
 | Benchmark | Accuracy | Correct / Total | Details |
 |---|---|---|---|
-| **IFEval Hard Constraints** | **`66.7%`** | 4 / 6 | Multi-constraint conjunctions, JSON ranges, negative constraints |
+| **IFEval Hard Constraints** | **`50.0%`** | 3 / 6 | Multi-constraint conjunctions, JSON ranges, negative constraints |
 
-**Failed Constraints:** `ifeval_h04 (no markdown table found), ifeval_h05 (section headers following tags are not in ALL CAPS)`
+**Failed Constraints:** `ifeval_h04 (table has only 0 rows (< 3)), ifeval_h05 (section headers following tags are not in ALL CAPS), ifeval_h06 (too short (0 < 50 words))`
 
 ## 🔢 Math Reasoning (AIME & Competition Math)
 
@@ -68,15 +68,15 @@ reasoning_ratio: 0.0000
 |---|---|---|---|
 | **AIME / Competition Math** | **`66.7%`** | 4 / 6 | Modular arithmetic, combinatorics, algebra & geometry proofs |
 
-**Failed Problems:** `aime_01 (got 7, expected 49), aime_05 (no integer answer found in response)`
+**Failed Problems:** `aime_02 (no integer answer found in response), aime_05 (no integer answer found in response)`
 
 ## 🔬 PhD Science Reasoning (GPQA Diamond)
 
 | Benchmark | Accuracy | Correct / Total | Details |
 |---|---|---|---|
-| **GPQA Diamond (Physics / Chem / Bio)** | **`50.0%`** | 3 / 6 | Google-proof PhD-level deduction & domain reasoning |
+| **GPQA Diamond (Physics / Chem / Bio)** | **`66.7%`** | 4 / 6 | Google-proof PhD-level deduction & domain reasoning |
 
-**Failed Questions:** `gpqa_01 (no choice (A/B/C/D) extracted), gpqa_02 (no choice (A/B/C/D) extracted), gpqa_04 (no choice (A/B/C/D) extracted)`
+**Failed Questions:** `gpqa_01 (no choice (A/B/C/D) extracted), gpqa_04 (no choice (A/B/C/D) extracted)`
 
 ## 💻 Code Intelligence (HumanEval+ Data Structures)
 
@@ -89,17 +89,17 @@ reasoning_ratio: 0.0000
 ## 📊 Machine-Readable Metrics
 
 ```
-METRIC tokens_per_second=264.459
-METRIC conc8_tps=264.459
-METRIC conc4_tps=171.901
-METRIC single_stream_tps=94.393
-METRIC time_to_first_token_ms=6419.533
-METRIC total_duration_seconds=306.929
+METRIC tokens_per_second=112.965
+METRIC conc8_tps=112.965
+METRIC conc4_tps=69.094
+METRIC single_stream_tps=35.690
+METRIC time_to_first_token_ms=14655.041
+METRIC total_duration_seconds=736.285
 METRIC smart_composite_score=0.7473
 METRIC tool_call_accuracy=0.9032
-METRIC ifeval_accuracy=0.6667
+METRIC ifeval_accuracy=0.5000
 METRIC gsm8k_accuracy=0.6667
-METRIC gpqa_accuracy=0.5000
+METRIC gpqa_accuracy=0.6667
 METRIC humaneval_accuracy=1.0000
 METRIC reasoning_ratio=0.0000
 ```

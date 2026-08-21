@@ -39,8 +39,8 @@ uv sync
 
 Default target: `http://192.168.1.5:8888`. Both the **model** and the **serving engine** (vLLM, SGLang, MLX, llama.cpp / GGUF, Ollama, LM Studio, TGI, etc.) are **auto-detected** from the endpoint; override with `--model` / `--engine` (or `BENCH_MODEL` / `BENCH_ENGINE`). Hardware device label defaults to `DGX-Spark` on Linux and auto-detects your Apple chip (e.g. `M4-Max`, `M3-Pro`) on macOS.
 
+> **💡 Hardware Tip (DGX Spark / GB10):** If your benchmark numbers on a GB10 machine are ~2–2.5× lower than reported here, your GPU is likely in a known PMIC throttling state ("powercreep"). See [Hardware Health & Known DGX Spark Bug](#️-hardware-health-dgx-spark-normal-vs-powercreep-known-dgx-spark-bug) below.
 Typical run: ~3–4 minutes for full throughput (Single, 4x, 8x) and all 5 intelligence suites.
-
 ### Useful variants
 
 ```bash
@@ -149,30 +149,72 @@ human-readable summary is printed above them.
 After each benchmark run:
 1. **Result Markdown File**: Automatically saved to `results/<device>-<model>.md` (e.g. `results/DGX-Spark-Nemo-3.5-Lightning.md`). Each file contains structured YAML frontmatter, detailed performance tables, tool accuracy breakdown, and CI metrics.
 2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings comparing models and engines side-by-side:
-   - **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score across all 5 suites)
-   - **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single)
+- **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score across all 5 suites, indicating `Thinking` mode `on`/`off`)
+- **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single, with `Thinking` mode `on`/`off`)
 
 ```
 =============================================================================================================================
 🏆 Top 3 Smartest Models (Composite Intelligence Score: Tool, IFEval, AIME Math, GPQA, HumanEval+)
 =============================================================================================================================
- #   Model                  Engine     Device       Composite   Tool Acc   IFEval    AIME     GPQA     HumanEval+ 
- -   ---------------------- ---------- ------------ ----------- ---------- --------- -------- -------- -----------
- 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    70.0%       70.0%      N/A       N/A      N/A      N/A        
- 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    0.0%        N/A        N/A       N/A      0.0%     N/A        
+ #   Model                  Engine     Device       Composite   Tool Acc   IFEval    AIME     GPQA     HumanEval+  Thinking
+ -   ---------------------- ---------- ------------ ----------- ---------- --------- -------- -------- ----------- --------
+ 1   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    74.7%       90.3%      66.7%     66.7%    50.0%    100.0%      on
+ 2   Nemo-3.5-Lightning     SGLang     DGX-Spark    46.9%       67.7%      16.7%     33.3%    66.7%    50.0%       on
 
 =============================================================================================================================
 ⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
 =============================================================================================================================
- #   Model                  Engine     Device       8-Conc t/s    4-Conc t/s    Single t/s    Composite   Tool Acc
- -   ---------------------- ---------- ------------ ------------- ------------- ------------- ----------- ----------
- 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    196.1 tok/s   137.6 tok/s   61.5 tok/s    70.0%       70.0%
- 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    146.6 tok/s   76.7 tok/s    34.2 tok/s    0.0%        N/A
+ #   Model                  Engine     Device       8-Conc t/s    4-Conc t/s    Single t/s    Composite   Tool Acc   Thinking
+ -   ---------------------- ---------- ------------ ------------- ------------- ------------- ----------- ---------- --------
+ 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    321.7 tok/s   235.4 tok/s   125.3 tok/s   46.9%       67.7%      on
+ 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    264.5 tok/s   171.9 tok/s   94.4 tok/s    74.7%       90.3%      on
 =============================================================================================================================
 ```
 
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
 
+### ⚠️ Hardware Health: DGX Spark Normal vs. "Powercreep" (Known DGX Spark Bug)
+
+> **⚠️ Warning / Tip for GB10 Users:**  
+> If your benchmark numbers on a DGX Spark (NVIDIA GB10) machine do not match the numbers reported here (e.g. you observe ~112 tok/s instead of ~264 tok/s, or ~14.7s TTFT instead of ~6.4s), **this hardware anomaly is the most probable reason**.
+
+Under certain operating conditions or power transients, the **DGX Spark (NVIDIA GB10)** can enter a silent hardware throttling state known in the community as **"powercreep"** (or clamped state). This is a known DGX Spark hardware bug / PMIC rail anomaly (you can search online for more details regarding NVIDIA DGX Spark GB10 power and SM clock clamping issues).
+
+#### The Silent Failure Mode
+When powercrept:
+- Standard monitoring tools (`nvidia-smi`) misleadingly report normal GPU behavior (e.g. **96% GPU utilization**, **P0 power state**, and **zero thermal/power throttling flags** in NVML).
+- Under real matrix compute or LLM serving load, the hardware silently clamps down:
+  - **Streaming Multiprocessor (SM) Clocks:** Collapse from **~2,300–2,500 MHz** down to **~500–800 MHz** (average SM clock `< 1500 MHz`).
+  - **Power Draw:** Collapses from **~80–95 W peak** down to **~10–20 W** (peak power `< 40 W`).
+  - **Raw Tensor Compute:** Drops from **~95–100 TFLOP/s** down to **~23–36 TFLOP/s** (~**70% compute loss**).
+
+#### Performance Comparison: Normal vs. Powercreep
+
+The table below compares full benchmark runs of **`ornith-1.5-35b-a3b-nvfp4`** served on **vLLM** on the DGX Spark under healthy normal operation vs. the throttled powercreep state:
+
+| Benchmark Metric | DGX Spark (Normal / Healthy) | DGX Spark (Powercreep / Clamped) | Delta / Impact |
+|---|---|---|---|
+| **8-Concurrent Throughput** | **`264.46 tok/s`** | **`112.97 tok/s`** | 🔻 **-57.3%** (2.34× slower) |
+| **4-Concurrent Throughput** | **`171.90 tok/s`** | **`69.09 tok/s`** | 🔻 **-59.8%** (2.49× slower) |
+| **Single-Stream Throughput** | **`94.39 tok/s`** | **`35.69 tok/s`** | 🔻 **-62.2%** (2.64× slower) |
+| **Mean TTFT (8-Concurrent)** | **`6,419.5 ms`** (6.4s) | **`14,655.0 ms`** (14.7s) | 🔺 **+128.3%** (2.28× higher latency) |
+| **Total Benchmark Wall-Clock** | **`5m 6.9s`** (306.9s) | **`12m 16.3s`** (736.3s) | 🔻 **+139.9%** (2.40× longer run) |
+| **Raw FP16 Tensor Compute** | **`~95–100 TFLOP/s`** | **`~23–36 TFLOP/s`** | 🔻 **~70% raw compute collapse** |
+| **SM Clock Speeds** | **`~2,300–2,500 MHz`** | **`~500–800 MHz`** | 🔻 Clamped below 1.5 GHz |
+| **Peak GPU Power Draw** | **`~80–95 W`** | **`~10–20 W`** | 🔻 VRM / PMIC rail voltage drop |
+| **Composite Intelligence Score** | **`74.7%`** | **`74.7%`** | Same model reasoning fidelity |
+| **Tool Call Accuracy** | **`90.3%`** (28 / 31) | **`90.3%`** (28 / 31) | Unchanged (deterministic) |
+| **Google IFEval Hard** | **`66.7%`** (4 / 6) | **`50.0%`** (3 / 6) | 🔻 Constraint truncation from latency |
+| **AIME Math Reasoning** | **`66.7%`** (4 / 6) | **`66.7%`** (4 / 6) | Unchanged |
+| **GPQA Diamond Science** | **`50.0%`** (3 / 6) | **`66.7%`** (4 / 6) | Multiple choice deduction |
+| **HumanEval+ Code Exec** | **`100.0%`** (6 / 6) | **`100.0%`** (6 / 6) | Sandboxed unit tests pass |
+
+#### How to Reset the State
+
+> **⚠️ Crucial Note on Recovery:**  
+> A standard soft reboot (`sudo reboot`) does **NOT** reset the PMIC / VRM voltage regulator state on the GB10 board because the power rails remain energized.  
+> 
+> **To restart the state:** Simply **power off** the machine completely and disconnect/unplug the power supply for **~10 minutes** to allow the power rails and onboard capacitors to fully discharge. Powering back on will return the DGX Spark to its normal state with full compute (~95–100 TFLOP/s) and full throughput (~264 tok/s) restored.
 ---
 
 ## Live output
