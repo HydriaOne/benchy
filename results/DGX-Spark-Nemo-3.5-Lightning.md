@@ -3,7 +3,7 @@ model: "Nemo-3.5-Lightning"
 device: "DGX-Spark"
 engine: "SGLang"
 endpoint: "http://192.168.1.5:8888"
-thinking: "on"
+thinking: "auto"
 date: "2026-08-21T11:04:03.381740+00:00"
 tokens_per_second: 321.737
 conc8_tps: 321.737
@@ -27,7 +27,7 @@ reasoning_ratio: 0.7845
 - **Serving Engine:** `SGLang`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `Nemo-3.5-Lightning`
-- **Thinking Mode:** `on`
+- **Thinking Mode:** `auto`
 - **Total Execution Time:** **`4m 49.0s`** (289.0s)
 - **Concurrency Tiers:** `Single (1x)`, `4-Concurrent`, `8-Concurrent` (repeats: `3`)
 - **Seed:** `42`

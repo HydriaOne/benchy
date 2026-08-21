@@ -75,6 +75,34 @@ def _fmt_time(seconds: float) -> str:
     return f"{seconds:.1f}s"
 
 
+def _normalize_thinking(val: Any) -> str:
+    if val is None:
+        return "auto"
+    if isinstance(val, bool):
+        return "auto" if val else "off"
+    s = str(val).strip().lower()
+    if s in ("off", "false", "no", "0", "none"):
+        return "off"
+    if s in ("low", "min"):
+        return "low"
+    if s in ("medium", "med", "mid"):
+        return "medium"
+    if s in ("high", "max"):
+        return "high"
+    if s in ("xhigh", "extra-high", "very-high", "extra_high"):
+        return "xhigh"
+    if s in ("auto", "on", "true", "yes", "1"):
+        return "auto"
+    return s
+
+
+def _env_thinking() -> str:
+    raw = os.environ.get("BENCH_THINKING") or os.environ.get("BENCH_ENABLE_THINKING")
+    if not raw:
+        return "auto"
+    return _normalize_thinking(raw)
+
+
 @dataclass
 class Config:
     base_url: str = field(default_factory=lambda: os.environ.get("BENCH_BASE_URL", DEFAULT_BASE_URL))
@@ -84,7 +112,7 @@ class Config:
     tool_max_tokens: int = field(default_factory=lambda: _env_int("BENCH_TOOL_MAX_TOKENS", 1536))
     scenario_limit: int = field(default_factory=lambda: _env_int("BENCH_SCENARIOS", 0))
     temperature: float = 0.0
-    enable_thinking: bool = field(default_factory=lambda: os.environ.get("BENCH_ENABLE_THINKING", "true").strip().lower() in ("1", "true", "yes", "on"))
+    thinking: str = field(default_factory=_env_thinking)
     system_prompt: str | None = field(default_factory=lambda: os.environ.get("BENCH_SYSTEM_PROMPT") or None)
     repeats: int = field(default_factory=lambda: _env_int("BENCH_REPEATS", 3))
     sweep: bool = field(default_factory=lambda: os.environ.get("BENCH_SWEEP", "").strip().lower() in ("1", "true", "yes", "on"))
@@ -97,9 +125,22 @@ class Config:
     no_record: bool = field(default_factory=lambda: os.environ.get("BENCH_NO_RECORD", "").strip().lower() in ("1", "true", "yes", "on"))
 
     @property
-    def thinking_kwargs(self) -> dict | None:
-        return None if self.enable_thinking else {"enable_thinking": False}
+    def enable_thinking(self) -> bool:
+        return self.thinking != "off"
 
+    @property
+    def thinking_kwargs(self) -> dict | None:
+        if self.thinking == "off":
+            return {"enable_thinking": False}
+        if self.thinking == "auto":
+            return {"enable_thinking": True}
+        return {"enable_thinking": True, "reasoning_effort": self.thinking}
+
+    @property
+    def reasoning_effort(self) -> str | None:
+        if self.thinking in ("low", "medium", "high", "xhigh"):
+            return self.thinking
+        return None
     def should_eval(self, suite: str) -> bool:
         if self.eval_suites.lower() in ("all", "*"):
             return True
@@ -148,7 +189,7 @@ def _on_chunk(state: ReqState, tracker: Tracker, live: LiveUI, chunk: dict) -> N
     live.update()
 
 
-async def _run_stream(client, state, tracker, live, messages, *, tools, max_tokens, temperature, chat_template_kwargs=None):
+async def _run_stream(client, state, tracker, live, messages, *, tools, max_tokens, temperature, chat_template_kwargs=None, reasoning_effort=None):
     state.started_at = time.monotonic()
     res = await client.stream(
         messages,
@@ -156,6 +197,7 @@ async def _run_stream(client, state, tracker, live, messages, *, tools, max_toke
         max_tokens=max_tokens,
         temperature=temperature,
         chat_template_kwargs=chat_template_kwargs,
+        reasoning_effort=reasoning_effort,
         on_chunk=partial(_on_chunk, state, tracker, live),
     )
     state.elapsed_s = time.monotonic() - state.started_at
@@ -193,6 +235,7 @@ async def _throughput(client, tracker, live, cfg, concurrency: int):
                 messages,
                 tools=None, max_tokens=cfg.max_tokens, temperature=cfg.temperature,
                 chat_template_kwargs=cfg.thinking_kwargs,
+                reasoning_effort=cfg.reasoning_effort,
             )
         )
     t0 = time.monotonic()
@@ -236,6 +279,7 @@ async def _run_scenario(client, tracker, live, cfg, sc) -> ScenarioResult:
                 client, st, tracker, live, messages,
                 tools=tools, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
                 chat_template_kwargs=cfg.thinking_kwargs,
+                reasoning_effort=cfg.reasoning_effort,
             )
             tot_tokens += res.completion_tokens
             tot_reasoning += res.reasoning_tokens
@@ -301,6 +345,7 @@ async def _one_ifeval(client, tracker, live, cfg, sc) -> ScenarioResult:
             client, st, tracker, live, messages,
             tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
             chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
         )
         if res.error:
             st.status = "error"
@@ -334,6 +379,7 @@ async def _one_gsm8k(client, tracker, live, cfg, sc) -> ScenarioResult:
             client, st, tracker, live, messages,
             tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
             chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
         )
         if res.error:
             st.status = "error"
@@ -367,6 +413,7 @@ async def _one_gpqa(client, tracker, live, cfg, sc) -> ScenarioResult:
             client, st, tracker, live, messages,
             tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
             chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
         )
         if res.error:
             st.status = "error"
@@ -400,6 +447,7 @@ async def _one_humaneval(client, tracker, live, cfg, sc) -> ScenarioResult:
             client, st, tracker, live, messages,
             tools=None, max_tokens=cfg.max_tokens, temperature=cfg.temperature,
             chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
         )
         if res.error:
             st.status = "error"
@@ -472,7 +520,7 @@ def _save_report_md(
         f'device: "{cfg.device}"',
         f'engine: "{cfg.engine or "auto"}"',
         f'endpoint: "{cfg.base_url}"',
-        f'thinking: "{"on" if cfg.enable_thinking else "off"}"',
+        f'thinking: "{cfg.thinking}"',
         f'date: "{date_iso}"',
         f"tokens_per_second: {conc8_tps:.3f}",
         f"conc8_tps: {conc8_tps:.3f}",
@@ -496,7 +544,7 @@ def _save_report_md(
         f"- **Serving Engine:** `{cfg.engine or 'OpenAI-Compatible'}`",
         f"- **Endpoint:** `{cfg.base_url}`",
         f"- **Model:** `{cfg.model}`",
-        f"- **Thinking Mode:** `{'on' if cfg.enable_thinking else 'off'}`",
+        f"- **Thinking Mode:** `{cfg.thinking}`",
         f"- **Total Execution Time:** **`{_fmt_time(total_duration_s)}`** ({total_duration_s:.1f}s)",
         f"- **Concurrency Tiers:** `Single (1x)`, `4-Concurrent`, `8-Concurrent` (repeats: `{len(conc8_reps)}`)",
         f"- **Seed:** `{cfg.seed}`",
@@ -676,10 +724,15 @@ def _parse_frontmatter(content: str) -> dict | None:
             except ValueError:
                 data[key] = val
     if "thinking" not in data:
-        if "- **Thinking Mode:** `off`" in content:
+        match = re.search(r"\*\*Thinking Mode:\*\*\s*`([^`]+)`", content)
+        if match:
+            data["thinking"] = _normalize_thinking(match.group(1))
+        elif "- **Thinking Mode:** `off`" in content:
             data["thinking"] = "off"
         elif "- **Thinking Mode:** `on`" in content:
-            data["thinking"] = "on"
+            data["thinking"] = "auto"
+    else:
+        data["thinking"] = _normalize_thinking(data["thinking"])
     return data
 
 
@@ -687,12 +740,7 @@ def _format_thinking(m: dict) -> str:
     raw = m.get("thinking")
     if raw is None:
         return "N/A"
-    s = str(raw).strip().lower()
-    if s in ("on", "true", "yes", "1"):
-        return "on"
-    if s in ("off", "false", "no", "0"):
-        return "off"
-    return s[:9]
+    return _normalize_thinking(raw)
 
 
 def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
@@ -991,8 +1039,8 @@ async def _sweep(client, tracker, live, cfg):
                 messages.insert(0, {"role": "system", "content": cfg.system_prompt})
             tasks.append(_run_stream(client, st, tracker, live, messages, tools=None,
                                      max_tokens=cfg.max_tokens, temperature=cfg.temperature,
-                                     chat_template_kwargs=cfg.thinking_kwargs))
-        t0 = time.monotonic()
+                                     chat_template_kwargs=cfg.thinking_kwargs,
+                                     reasoning_effort=cfg.reasoning_effort))
         results = await asyncio.gather(*tasks)
         wall = time.monotonic() - t0
         total = sum(r.completion_tokens for r in results if not r.error)
@@ -1026,7 +1074,7 @@ async def _main(cfg: Config) -> int:
     tracker = Tracker()
     live = LiveUI(
         tracker=tracker,
-        header=f"Agentic benchmark — {cfg.model} [{cfg.engine}] on {cfg.device} @ {cfg.base_url} (thinking={'on' if cfg.enable_thinking else 'off'}, temp={cfg.temperature}, seed={cfg.seed})",
+        header=f"Agentic benchmark — {cfg.model} [{cfg.engine}] on {cfg.device} @ {cfg.base_url} (thinking={cfg.thinking}, temp={cfg.temperature}, seed={cfg.seed})",
         enabled=sys.stderr.isatty(),
     )
     live.start()
@@ -1098,8 +1146,27 @@ def main() -> int:
     parser.add_argument("--scenarios", type=int, default=None, help="limit scenarios per suite, 0=all (default 0)")
     parser.add_argument("--repeats", type=int, default=None, help="concurrent rounds; median is reported (default 3)")
     parser.add_argument("--seed", type=int, default=None, help="harness RNG seed (default 42; workload is fixed at temperature 0)")
-    parser.add_argument("--thinking", dest="thinking", action="store_true", default=None, help="enable model reasoning (default)")
-    parser.add_argument("--no-thinking", dest="thinking", action="store_false", help="disable reasoning (fast mode)")
+    parser.add_argument(
+        "--thinking",
+        nargs="?",
+        const="auto",
+        default=None,
+        choices=["off", "low", "medium", "high", "xhigh", "auto", "on"],
+        help="thinking / reasoning mode: off, low, medium, high, xhigh, auto (default: auto)",
+    )
+    parser.add_argument(
+        "--no-thinking",
+        dest="no_thinking",
+        action="store_true",
+        default=None,
+        help="disable reasoning (equivalent to --thinking off)",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default=None,
+        choices=["off", "low", "medium", "high", "xhigh", "auto"],
+        help="reasoning effort level (alias for --thinking)",
+    )
     parser.add_argument("--system-prompt", default=None, help="prepend this system message to every request")
     parser.add_argument("--sweep", action="store_true", default=None, help="report 1/2/4/8/16 concurrency scaling curve")
     parser.add_argument("--temperature", type=float, default=None, help="sampling temperature (default 0.0)")
@@ -1121,7 +1188,7 @@ def main() -> int:
         ("scenario_limit", args.scenarios),
         ("repeats", args.repeats),
         ("seed", args.seed),
-        ("enable_thinking", args.thinking),
+
         ("system_prompt", args.system_prompt),
         ("sweep", args.sweep),
         ("temperature", args.temperature),
@@ -1129,6 +1196,16 @@ def main() -> int:
     ):
         if value is not None:
             setattr(cfg, attr, value)
+    thinking_val = None
+    if getattr(args, "no_thinking", False):
+        thinking_val = "off"
+    elif getattr(args, "reasoning_effort", None) is not None:
+        thinking_val = _normalize_thinking(args.reasoning_effort)
+    elif getattr(args, "thinking", None) is not None:
+        thinking_val = _normalize_thinking(args.thinking)
+
+    if thinking_val is not None:
+        cfg.thinking = thinking_val
 
     try:
         return asyncio.run(_main(cfg))

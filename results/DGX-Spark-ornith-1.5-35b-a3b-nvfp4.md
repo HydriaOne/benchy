@@ -3,7 +3,7 @@ model: "ornith-1.5-35b-a3b-nvfp4"
 device: "DGX-Spark"
 engine: "vLLM"
 endpoint: "http://192.168.1.5:8888"
-thinking: "on"
+thinking: "auto"
 date: "2026-08-21T11:18:06.873565+00:00"
 tokens_per_second: 264.459
 conc8_tps: 264.459
@@ -27,7 +27,7 @@ reasoning_ratio: 0.0000
 - **Serving Engine:** `vLLM`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `ornith-1.5-35b-a3b-nvfp4`
-- **Thinking Mode:** `on`
+- **Thinking Mode:** `auto`
 - **Total Execution Time:** **`5m 6.9s`** (306.9s)
 - **Concurrency Tiers:** `Single (1x)`, `4-Concurrent`, `8-Concurrent` (repeats: `3`)
 - **Seed:** `42`

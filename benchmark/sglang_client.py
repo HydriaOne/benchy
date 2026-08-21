@@ -169,6 +169,7 @@ class ChatClient:
         max_tokens: int = 1024,
         temperature: float = 0.0,
         chat_template_kwargs: dict | None = None,
+        reasoning_effort: str | None = None,
         on_chunk: Callable[[dict], None] | None = None,
     ) -> StreamResult:
         payload: dict[str, Any] = {
@@ -181,6 +182,8 @@ class ChatClient:
         }
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
         if tools:
             payload["tools"] = tools
 

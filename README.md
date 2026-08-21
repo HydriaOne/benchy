@@ -27,7 +27,7 @@ Python + `uv`. Deterministic, offline workload with **live streamed thinking tra
 # 1. Install dependencies (creates .venv, resolves uv.lock)
 uv sync
 
-# 2. Run the full benchmark (defaults: single + 4x + 8x throughput, thinking on,
+# 2. Run the full benchmark (defaults: single + 4x + 8x throughput, thinking auto,
 #    model & engine auto-detected from the endpoint)
 ./tool-eval-bench --seed 42 --base-url http://192.168.1.5:8888
 #    equivalent: uv run --frozen python -m benchmark.main
@@ -51,9 +51,13 @@ Typical run: ~3–4 minutes for full throughput (Single, 4x, 8x) and all 5 intel
 ./tool-eval-bench --base-url http://localhost:1234                          # LM Studio
 ./tool-eval-bench --base-url https://api.myserver.com/v1 --api-key sk-...  # Remote / Auth Gateway
 
-# Fast mode: disable reasoning + tool-use system prompt → ~9× lower latency, same accuracy
+# Fast mode: disable reasoning (off) + tool-use system prompt → ~9× lower latency, same accuracy
 ./tool-eval-bench --no-thinking --system-prompt "You are a helpful assistant with access to tools. When the user asks for data you cannot know from training (weather, prices, flights, products), you MUST call the matching tool. Never say you cannot provide real-time data — call the tool instead."
 
+# Set specific thinking / reasoning effort level (off, low, medium, high, xhigh, auto):
+./tool-eval-bench --thinking medium
+./tool-eval-bench --thinking high
+./tool-eval-bench --reasoning-effort low
 # Run specific intelligence suites (e.g. only tools + science, or coding only)
 ./tool-eval-bench --eval tool,gpqa
 ./tool-eval-bench --eval gsm8k,humaneval
@@ -86,7 +90,9 @@ Typical run: ~3–4 minutes for full throughput (Single, 4x, 8x) and all 5 intel
 | `--scenarios` | 0 (all) | scenario limit per suite |
 | `--repeats` | 3 | concurrent rounds; median reported |
 | `--seed` | 42 | harness RNG seed (workload is fixed at temperature 0) |
-| `--thinking` / `--no-thinking` | on | reasoning toggle |
+| `--thinking` | `auto` | thinking / reasoning mode: `off`, `low`, `medium`, `high`, `xhigh`, `auto` |
+| `--no-thinking` | (off) | disable reasoning (alias for `--thinking off`) |
+| `--reasoning-effort` | none | reasoning effort level (alias for `--thinking`) |
 | `--system-prompt` | none | prepended system message |
 | `--sweep` | off | report 1/2/4/8/16 scaling curve |
 | `--temperature` | 0.0 | sampling temperature |
@@ -112,9 +118,8 @@ Precedence: CLI flags → `BENCH_*` env vars → defaults.
 | `BENCH_TOOL_MAX_TOKENS` | `1536` | output-token cap per intelligence test problem/turn |
 | `BENCH_SCENARIOS` | `0` (= all) | limit number of scenarios per suite |
 | `BENCH_REPEATS` | `3` | concurrent-throughput rounds; the median is reported (stability) |
-| `BENCH_ENABLE_THINKING` | `true` | pass `chat_template_kwargs={"enable_thinking": …}` (Nemotron toggle) |
 | `BENCH_SYSTEM_PROMPT` | (none) | prepended system message to every request |
-| `BENCH_SWEEP` | `off` | also report the 1/2/4/8/16 concurrency scaling curve |
+| `BENCH_THINKING` | `auto` | thinking level: `off`, `low`, `medium`, `high`, `xhigh`, `auto` (`BENCH_ENABLE_THINKING` also supported) |
 | `BENCH_SEED` | `42` | harness RNG seed (workload is fixed at temperature 0) |
 | `BENCH_NO_RECORD` | `off` | do not save result report to `results/` markdown file |
 | `temperature` | `0.0` | fixed (deterministic workload) |
@@ -149,8 +154,8 @@ human-readable summary is printed above them.
 After each benchmark run:
 1. **Result Markdown File**: Automatically saved to `results/<device>-<model>.md` (e.g. `results/DGX-Spark-Nemo-3.5-Lightning.md`). Each file contains structured YAML frontmatter, detailed performance tables, tool accuracy breakdown, and CI metrics.
 2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings comparing models and engines side-by-side:
-- **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score across all 5 suites, indicating `Thinking` mode `on`/`off`)
-- **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single, with `Thinking` mode `on`/`off`)
+- **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score across all 5 suites)
+- **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single)
 
 ```
 =============================================================================================================================
@@ -158,16 +163,16 @@ After each benchmark run:
 =============================================================================================================================
  #   Model                  Engine     Device       Composite   Tool Acc   IFEval    AIME     GPQA     HumanEval+  Thinking
  -   ---------------------- ---------- ------------ ----------- ---------- --------- -------- -------- ----------- --------
- 1   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    74.7%       90.3%      66.7%     66.7%    50.0%    100.0%      on
- 2   Nemo-3.5-Lightning     SGLang     DGX-Spark    46.9%       67.7%      16.7%     33.3%    66.7%    50.0%       on
+ 1   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    74.7%       90.3%      66.7%     66.7%    50.0%    100.0%      auto
+ 2   Nemo-3.5-Lightning     SGLang     DGX-Spark    46.9%       67.7%      16.7%     33.3%    66.7%    50.0%       auto
 
 =============================================================================================================================
 ⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
 =============================================================================================================================
  #   Model                  Engine     Device       8-Conc t/s    4-Conc t/s    Single t/s    Composite   Tool Acc   Thinking
  -   ---------------------- ---------- ------------ ------------- ------------- ------------- ----------- ---------- --------
- 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    321.7 tok/s   235.4 tok/s   125.3 tok/s   46.9%       67.7%      on
- 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    264.5 tok/s   171.9 tok/s   94.4 tok/s    74.7%       90.3%      on
+ 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    321.7 tok/s   235.4 tok/s   125.3 tok/s   46.9%       67.7%      auto
+ 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    264.5 tok/s   171.9 tok/s   94.4 tok/s    74.7%       90.3%      auto
 =============================================================================================================================
 ```
 
