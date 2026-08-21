@@ -163,9 +163,9 @@ After each benchmark run:
 =============================================================================================================================
  #   Model                  Engine     Device       Composite   Tool Acc   IFEval    AIME     GPQA     HumanEval+  Thinking
  -   ---------------------- ---------- ------------ ----------- ---------- --------- -------- -------- ----------- --------
- 1   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    74.7%       90.3%      66.7%     66.7%    50.0%    100.0%      auto
- 2   Nemo-3.5-Lightning     SGLang     DGX-Spark    46.9%       67.7%      16.7%     33.3%    66.7%    50.0%       auto
-
+ 1   deepseek-v4-flash-0731 vLLM       DGX-Spark    79.3%       96.8%      83.3%     66.7%    83.3%    66.7%       auto
+ 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    74.7%       90.3%      66.7%     66.7%    50.0%    100.0%      auto
+ 3   Nemo-3.5-Lightning     SGLang     DGX-Spark    46.9%       67.7%      16.7%     33.3%    66.7%    50.0%       auto
 =============================================================================================================================
 ⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
 =============================================================================================================================
@@ -173,7 +173,7 @@ After each benchmark run:
  -   ---------------------- ---------- ------------ ------------- ------------- ------------- ----------- ---------- --------
  1   Nemo-3.5-Lightning     SGLang     DGX-Spark    321.7 tok/s   235.4 tok/s   125.3 tok/s   46.9%       67.7%      auto
  2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    264.5 tok/s   171.9 tok/s   94.4 tok/s    74.7%       90.3%      auto
-=============================================================================================================================
+ 3   deepseek-v4-flash-0731 vLLM       DGX-Spark    34.1 tok/s    34.6 tok/s    34.1 tok/s    79.3%       96.8%      auto
 ```
 
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
