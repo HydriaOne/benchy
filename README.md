@@ -82,6 +82,7 @@ Typical run: ~3–4 minutes for full throughput (Single, 4x, 8x) and all 5 intel
 | `--device`, `--gpu` | `BENCH_DEVICE` → `DGX-Spark` | device/GPU name for result filenames |
 | `--results-dir` | `BENCH_RESULTS_DIR` → `results` | directory where report `.md` files are saved |
 | `--engine` | auto-detect (vLLM, SGLang, llama.cpp, Ollama, etc.) | serving engine name/override |
+| `--quant`, `--quantization` | auto-detect (NVFP4, EXL3, FP8, AWQ, BF16, etc.) | model quantization label/override |
 | `--model` | auto-detect from `/v1/models` | model id |
 | `--eval` | `all` | evaluation suites: `all` or comma-separated (`tool,ifeval,gsm8k,gpqa,humaneval`) |
 | `--concurrency` | 8 | concurrent streams for primary tier |
@@ -112,6 +113,7 @@ Precedence: CLI flags → `BENCH_*` env vars → defaults.
 | `BENCH_RESULTS_DIR` | `results` | directory to save benchmark `.md` reports |
 | `BENCH_MODEL` | (auto-detect) | model id; unset → first model from `GET /v1/models` |
 | `BENCH_ENGINE` | (auto-detect) | engine name (vLLM, SGLang, MLX, llama.cpp, etc.) |
+| `BENCH_QUANT` | (auto-detect) | model quantization label (NVFP4, EXL3, FP8, AWQ, BF16, etc.) |
 | `BENCH_EVAL` | `all` | active eval suites: `all` or comma-separated (`tool,ifeval,gsm8k,gpqa,humaneval`) |
 | `BENCH_CONCURRENCY` | `8` | concurrent streams for the headline throughput metric |
 | `BENCH_MAX_TOKENS` | `2048` | throughput generation token cap |
@@ -158,23 +160,24 @@ After each benchmark run:
 - **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single)
 
 ```
-=============================================================================================================================
+=====================================================================================================================================
 🏆 Top 3 Smartest Models (Composite Intelligence Score: Tool, IFEval, AIME Math, GPQA, HumanEval+)
-=============================================================================================================================
- #   Model                  Engine     Device       Composite   Tool Acc   IFEval    AIME     GPQA     HumanEval+  Thinking
- -   ---------------------- ---------- ------------ ----------- ---------- --------- -------- -------- ----------- --------
- 1   deepseek-v4-flash-0731 vLLM       DGX-Spark    79.3%       96.8%      83.3%     66.7%    83.3%    66.7%       auto
- 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    74.7%       90.3%      66.7%     66.7%    50.0%    100.0%      auto
- 3   Nemo-3.5-Lightning     SGLang     DGX-Spark    46.9%       67.7%      16.7%     33.3%    66.7%    50.0%       auto
-=============================================================================================================================
+=====================================================================================================================================
+ #   Model                  Engine     Device       Quant    Composite   Tool Acc   IFEval    AIME     GPQA     HumanEval+  Thinking
+ -   ---------------------- ---------- ------------ -------- ----------- ---------- --------- -------- -------- ----------- --------
+ 1   deepseek-v4-flash-0731 vLLM       DGX-Spark    EXL3     79.3%       96.8%      83.3%     66.7%    83.3%    66.7%       auto
+ 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    NVFP4    74.7%       90.3%      66.7%     66.7%    50.0%    100.0%      auto
+ 3   Nemo-3.5-Lightning     SGLang     DGX-Spark    FP8      46.9%       67.7%      16.7%     33.3%    66.7%    50.0%       auto
+
+=====================================================================================================================================
 ⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
-=============================================================================================================================
- #   Model                  Engine     Device       8-Conc t/s    4-Conc t/s    Single t/s    Composite   Tool Acc   Thinking
- -   ---------------------- ---------- ------------ ------------- ------------- ------------- ----------- ---------- --------
- 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    321.7 tok/s   235.4 tok/s   125.3 tok/s   46.9%       67.7%      auto
- 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    264.5 tok/s   171.9 tok/s   94.4 tok/s    74.7%       90.3%      auto
- 3   deepseek-v4-flash-0731 vLLM       DGX-Spark    34.1 tok/s    34.6 tok/s    34.1 tok/s    79.3%       96.8%      auto
-```
+=====================================================================================================================================
+ #   Model                  Engine     Device       Quant    8-Conc t/s    4-Conc t/s    Single t/s    Composite   Tool Acc   Thinking
+ -   ---------------------- ---------- ------------ -------- ------------- ------------- ------------- ----------- ---------- --------
+ 1   Nemo-3.5-Lightning     SGLang     DGX-Spark    FP8      321.7 tok/s   235.4 tok/s   125.3 tok/s   46.9%       67.7%      auto
+ 2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    NVFP4    264.5 tok/s   171.9 tok/s   94.4 tok/s    74.7%       90.3%      auto
+ 3   deepseek-v4-flash-0731 vLLM       DGX-Spark    EXL3     34.1 tok/s    34.6 tok/s    34.1 tok/s    79.3%       96.8%      auto
+=====================================================================================================================================
 
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
 

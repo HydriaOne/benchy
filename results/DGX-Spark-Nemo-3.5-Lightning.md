@@ -2,6 +2,7 @@
 model: "Nemo-3.5-Lightning"
 device: "DGX-Spark"
 engine: "SGLang"
+quant: "FP8"
 endpoint: "http://192.168.1.5:8888"
 thinking: "auto"
 date: "2026-08-21T11:04:03.381740+00:00"
@@ -25,6 +26,7 @@ reasoning_ratio: 0.7845
 - **Date:** 2026-08-21 11:04:03 UTC
 - **Device / GPU:** `DGX-Spark`
 - **Serving Engine:** `SGLang`
+- **Quantization:** `FP8`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `Nemo-3.5-Lightning`
 - **Thinking Mode:** `auto`

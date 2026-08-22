@@ -2,6 +2,7 @@
 model: "ornith-1.5-35b-a3b-nvfp4"
 device: "DGX-Spark"
 engine: "vLLM"
+quant: "NVFP4"
 endpoint: "http://192.168.1.5:8888"
 thinking: "auto"
 date: "2026-08-21T11:18:06.873565+00:00"
@@ -25,6 +26,7 @@ reasoning_ratio: 0.0000
 - **Date:** 2026-08-21 11:18:06 UTC
 - **Device / GPU:** `DGX-Spark`
 - **Serving Engine:** `vLLM`
+- **Quantization:** `NVFP4`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `ornith-1.5-35b-a3b-nvfp4`
 - **Thinking Mode:** `auto`

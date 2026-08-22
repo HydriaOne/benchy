@@ -103,6 +103,50 @@ def _env_thinking() -> str:
     return _normalize_thinking(raw)
 
 
+def _detect_quant(model_name: str | None, raw_quant: str | None = None) -> str:
+    if raw_quant:
+        q = str(raw_quant).strip()
+        if q.lower() in ("null", "none", ""):
+            return "N/A"
+        return q.upper() if q.lower() in ("nvfp4", "exl3", "fp8", "awq", "gptq", "mxfp4", "bf16", "fp16", "int4", "int8") else q
+    if not model_name:
+        return "auto"
+    nl = model_name.lower()
+    if "nvfp4" in nl:
+        return "NVFP4"
+    if "exl3" in nl or "deepseek-v4-flash" in nl:
+        return "EXL3"
+    if "fp8" in nl or "nemo-3.5" in nl:
+        return "FP8"
+    if "awq" in nl:
+        return "AWQ"
+    if "gptq" in nl:
+        return "GPTQ"
+    if "mxfp4" in nl:
+        return "MXFP4"
+    if "q4_k_m" in nl:
+        return "Q4_K_M"
+    if "q4_k_s" in nl:
+        return "Q4_K_S"
+    if "q4_k" in nl or "q4_0" in nl or "q4_1" in nl:
+        return "Q4_K"
+    if "q8_0" in nl:
+        return "Q8_0"
+    if "bf16" in nl or "bfloat16" in nl:
+        return "BF16"
+    if "fp16" in nl or "float16" in nl:
+        return "FP16"
+    if "int4" in nl or "4bit" in nl:
+        return "INT4"
+    if "int8" in nl or "8bit" in nl:
+        return "INT8"
+    return "auto"
+
+
+def _env_quant() -> str | None:
+    return os.environ.get("BENCH_QUANT") or os.environ.get("BENCH_QUANTIZATION") or None
+
+
 @dataclass
 class Config:
     base_url: str = field(default_factory=lambda: os.environ.get("BENCH_BASE_URL", DEFAULT_BASE_URL))
@@ -120,6 +164,7 @@ class Config:
     api_key: str | None = field(default_factory=lambda: os.environ.get("BENCH_API_KEY") or None)
     device: str = field(default_factory=_detect_default_device)
     engine: str | None = field(default_factory=lambda: os.environ.get("BENCH_ENGINE") or None)
+    quant: str | None = field(default_factory=_env_quant)
     results_dir: str = field(default_factory=lambda: os.environ.get("BENCH_RESULTS_DIR", "results"))
     eval_suites: str = field(default_factory=lambda: os.environ.get("BENCH_EVAL", "all"))
     no_record: bool = field(default_factory=lambda: os.environ.get("BENCH_NO_RECORD", "").strip().lower() in ("1", "true", "yes", "on"))
@@ -141,6 +186,10 @@ class Config:
         if self.thinking in ("low", "medium", "high", "xhigh"):
             return self.thinking
         return None
+
+    @property
+    def resolved_quant(self) -> str:
+        return _detect_quant(self.model, self.quant)
     def should_eval(self, suite: str) -> bool:
         if self.eval_suites.lower() in ("all", "*"):
             return True
@@ -519,6 +568,7 @@ def _save_report_md(
         f'model: "{cfg.model}"',
         f'device: "{cfg.device}"',
         f'engine: "{cfg.engine or "auto"}"',
+        f'quant: "{cfg.resolved_quant}"',
         f'endpoint: "{cfg.base_url}"',
         f'thinking: "{cfg.thinking}"',
         f'date: "{date_iso}"',
@@ -542,6 +592,7 @@ def _save_report_md(
         f"- **Date:** {date_str}",
         f"- **Device / GPU:** `{cfg.device}`",
         f"- **Serving Engine:** `{cfg.engine or 'OpenAI-Compatible'}`",
+        f"- **Quantization:** `{cfg.resolved_quant}`",
         f"- **Endpoint:** `{cfg.base_url}`",
         f"- **Model:** `{cfg.model}`",
         f"- **Thinking Mode:** `{cfg.thinking}`",
@@ -723,6 +774,15 @@ def _parse_frontmatter(content: str) -> dict | None:
                     data[key] = int(val)
             except ValueError:
                 data[key] = val
+    if "quant" not in data:
+        match = re.search(r"\*\*Quantization:\*\*\s*`([^`]+)`", content)
+        if match:
+            data["quant"] = match.group(1).strip()
+        else:
+            data["quant"] = _detect_quant(data.get("model"))
+    elif data["quant"] is not None:
+        data["quant"] = str(data["quant"]).strip()
+
     if "thinking" not in data:
         match = re.search(r"\*\*Thinking Mode:\*\*\s*`([^`]+)`", content)
         if match:
@@ -736,12 +796,18 @@ def _parse_frontmatter(content: str) -> dict | None:
     return data
 
 
+def _format_quant(m: dict) -> str:
+    raw = m.get("quant")
+    if raw:
+        return str(raw).strip()[:8]
+    return _detect_quant(m.get("model"))[:8]
+
+
 def _format_thinking(m: dict) -> str:
     raw = m.get("thinking")
     if raw is None:
         return "N/A"
     return _normalize_thinking(raw)
-
 
 def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
     if not os.path.isdir(results_dir):
@@ -764,13 +830,14 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
     if not entries:
         return
 
-    # Deduplicate by (model, device, thinking) keeping the entry with highest composite score or tool_call_accuracy
-    unique: dict[tuple[str, str, str], dict] = {}
+    # Deduplicate by (model, device, quant, thinking) keeping the entry with highest composite score or tool_call_accuracy
+    unique: dict[tuple[str, str, str, str], dict] = {}
     for e in entries:
         m_name = str(e.get("model") or "")
         d_name = str(e.get("device") or "")
+        q_name = _format_quant(e)
         th_name = _format_thinking(e)
-        key = (m_name, d_name, th_name)
+        key = (m_name, d_name, q_name, th_name)
         if key not in unique:
             unique[key] = e
         else:
@@ -806,15 +873,16 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
     )[:3]
 
     print()
-    print("=" * 125)
+    print("=" * 133)
     print("🏆 Top 3 Smartest Models (Composite Intelligence Score: Tool, IFEval, AIME Math, GPQA, HumanEval+)")
-    print("=" * 125)
-    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Composite':<11} {'Tool Acc':<10} {'IFEval':<9} {'AIME':<8} {'GPQA':<8} {'HumanEval+':<11} {'Thinking'}")
-    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*11:<11} {'-'*10:<10} {'-'*9:<9} {'-'*8:<8} {'-'*8:<8} {'-'*11:<11} {'-'*8}")
+    print("=" * 133)
+    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Quant':<8} {'Composite':<11} {'Tool Acc':<10} {'IFEval':<9} {'AIME':<8} {'GPQA':<8} {'HumanEval+':<11} {'Thinking'}")
+    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*8:<8} {'-'*11:<11} {'-'*10:<10} {'-'*9:<9} {'-'*8:<8} {'-'*8:<8} {'-'*11:<11} {'-'*8}")
     for i, m in enumerate(smartest, 1):
         model_str = str(m.get("model", "unknown"))[:22]
         eng_str = str(m.get("engine", "unknown"))[:10]
         dev_str = str(m.get("device", "unknown"))[:12]
+        q_str = _format_quant(m)
         th_str = _format_thinking(m)
         raw_comp = m.get("smart_composite_score") if m.get("smart_composite_score") is not None else m.get("tool_call_accuracy")
         comp_val = f"{float(raw_comp) * 100:.1f}%" if raw_comp is not None else "N/A"
@@ -823,17 +891,19 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
         gsm8k_acc = f"{float(m['gsm8k_accuracy']) * 100:.1f}%" if m.get("gsm8k_accuracy") is not None else "N/A"
         gpqa_acc = f"{float(m['gpqa_accuracy']) * 100:.1f}%" if m.get("gpqa_accuracy") is not None else "N/A"
         he_acc = f"{float(m['humaneval_accuracy']) * 100:.1f}%" if m.get("humaneval_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {comp_val:<11} {tool_acc:<10} {ifeval_acc:<9} {gsm8k_acc:<8} {gpqa_acc:<8} {he_acc:<11} {th_str}")
+        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {q_str:<8} {comp_val:<11} {tool_acc:<10} {ifeval_acc:<9} {gsm8k_acc:<8} {gpqa_acc:<8} {he_acc:<11} {th_str}")
+
     print()
-    print("=" * 125)
+    print("=" * 133)
     print("⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)")
-    print("=" * 125)
-    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'8-Conc t/s':<13} {'4-Conc t/s':<13} {'Single t/s':<13} {'Composite':<11} {'Tool Acc':<10} {'Thinking'}")
-    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*13:<13} {'-'*13:<13} {'-'*13:<13} {'-'*11:<11} {'-'*10:<10} {'-'*8}")
+    print("=" * 133)
+    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Quant':<8} {'8-Conc t/s':<13} {'4-Conc t/s':<13} {'Single t/s':<13} {'Composite':<11} {'Tool Acc':<10} {'Thinking'}")
+    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*8:<8} {'-'*13:<13} {'-'*13:<13} {'-'*13:<13} {'-'*11:<11} {'-'*10:<10} {'-'*8}")
     for i, m in enumerate(fastest, 1):
         model_str = str(m.get("model", "unknown"))[:22]
         eng_str = str(m.get("engine", "unknown"))[:10]
         dev_str = str(m.get("device", "unknown"))[:12]
+        q_str = _format_quant(m)
         th_str = _format_thinking(m)
         c8_val = m.get("conc8_tps") or m.get("tokens_per_second")
         c8_str = f"{float(c8_val):.1f} tok/s" if c8_val is not None else "N/A"
@@ -844,8 +914,8 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
         raw_comp = m.get("smart_composite_score") if m.get("smart_composite_score") is not None else m.get("tool_call_accuracy")
         comp_val = f"{float(raw_comp) * 100:.1f}%" if raw_comp is not None else "N/A"
         tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {c8_str:<13} {c4_str:<13} {s_str:<13} {comp_val:<11} {tool_acc:<10} {th_str}")
-    print("=" * 125)
+        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {q_str:<8} {c8_str:<13} {c4_str:<13} {s_str:<13} {comp_val:<11} {tool_acc:<10} {th_str}")
+    print("=" * 133)
 
 
 def _report(
@@ -1146,6 +1216,7 @@ def main() -> int:
     parser.add_argument("--scenarios", type=int, default=None, help="limit scenarios per suite, 0=all (default 0)")
     parser.add_argument("--repeats", type=int, default=None, help="concurrent rounds; median is reported (default 3)")
     parser.add_argument("--seed", type=int, default=None, help="harness RNG seed (default 42; workload is fixed at temperature 0)")
+    parser.add_argument("--quant", "--quantization", dest="quant", default=None, help="model quantization label (e.g. NVFP4, EXL3, FP8, AWQ, BF16; default: auto-detect)")
     parser.add_argument(
         "--thinking",
         nargs="?",
@@ -1181,7 +1252,7 @@ def main() -> int:
         ("engine", args.engine),
         ("results_dir", args.results_dir),
         ("eval_suites", args.eval_suites),
-        ("api_key", args.api_key),
+        ("quant", args.quant),
         ("concurrency", args.concurrency),
         ("max_tokens", args.max_tokens),
         ("tool_max_tokens", args.tool_max_tokens),

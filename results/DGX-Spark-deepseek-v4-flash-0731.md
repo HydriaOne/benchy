@@ -2,6 +2,7 @@
 model: "deepseek-v4-flash-0731"
 device: "DGX-Spark"
 engine: "vLLM"
+quant: "EXL3"
 endpoint: "http://192.168.1.5:8888"
 thinking: "auto"
 date: "2026-08-21T13:22:57.942563+00:00"
@@ -25,6 +26,7 @@ reasoning_ratio: 0.0000
 - **Date:** 2026-08-21 13:22:57 UTC
 - **Device / GPU:** `DGX-Spark`
 - **Serving Engine:** `vLLM`
+- **Quantization:** `EXL3`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `deepseek-v4-flash-0731`
 - **Thinking Mode:** `auto`
