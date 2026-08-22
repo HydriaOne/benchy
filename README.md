@@ -39,10 +39,11 @@ uv sync
 
 Default target: `http://192.168.1.5:8888`. Both the **model** and the **serving engine** (vLLM, SGLang, MLX, llama.cpp / GGUF, Ollama, LM Studio, TGI, etc.) are **auto-detected** from the endpoint; override with `--model` / `--engine` (or `BENCH_MODEL` / `BENCH_ENGINE`). Hardware device label defaults to `DGX-Spark` on Linux and auto-detects your Apple chip (e.g. `M4-Max`, `M3-Pro`) on macOS.
 
-> **💡 Hardware Tip (DGX Spark / GB10):** If your benchmark numbers on a GB10 machine are ~2–2.5× lower than reported here, your GPU is likely in a known PMIC throttling state ("powercreep"). See [Hardware Health & Known DGX Spark Bug](#️-hardware-health-dgx-spark-normal-vs-powercreep-known-dgx-spark-bug) below.
-Typical run: ~3–4 minutes for full throughput (Single, 4x, 8x) and all 5 intelligence suites.
-### Useful variants
+> **💡 Hardware Tip (DGX Spark / GB10):** If your benchmark numbers on a GB10 machine are ~2–2.5× lower than reported here, your GPU is likely in a known PMIC throttling state ("powercreep"). See [Hardware Health & Known DGX Spark Bug](#hardware-health-dgx-spark-normal-vs-powercreep-known-dgx-spark-bug) below.
 
+Typical run: ~3–4 minutes for full throughput (Single, 4x, 8x) and all 5 intelligence suites.
+
+### Useful variants
 ```bash
 # Target any local or remote server:
 ./tool-eval-bench --base-url http://localhost:8000                          # vLLM / SGLang default
@@ -58,6 +59,7 @@ Typical run: ~3–4 minutes for full throughput (Single, 4x, 8x) and all 5 intel
 ./tool-eval-bench --thinking medium
 ./tool-eval-bench --thinking high
 ./tool-eval-bench --reasoning-effort low
+
 # Run specific intelligence suites (e.g. only tools + science, or coding only)
 ./tool-eval-bench --eval tool,gpqa
 ./tool-eval-bench --eval gsm8k,humaneval
@@ -156,8 +158,8 @@ human-readable summary is printed above them.
 After each benchmark run:
 1. **Result Markdown File**: Automatically saved to `results/<device>-<model>.md` (e.g. `results/DGX-Spark-Nemo-3.5-Lightning.md`). Each file contains structured YAML frontmatter, detailed performance tables, tool accuracy breakdown, and CI metrics.
 2. **Terminal Leaderboard**: Scans all result files in `results/` and prints two live rankings comparing models and engines side-by-side:
-- **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score across all 5 suites)
-- **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single)
+   - **🏆 Top 3 Smartest Models** (ranked by Composite Intelligence Score across all 5 suites)
+   - **⚡ Top 3 Fastest Models** (ranked by generation throughput: 8-Conc / 4-Conc / Single)
 
 ```
 =====================================================================================================================================
@@ -181,6 +183,7 @@ After each benchmark run:
 
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
 
+<a id="hardware-health-dgx-spark-normal-vs-powercreep-known-dgx-spark-bug"></a>
 ### ⚠️ Hardware Health: DGX Spark Normal vs. "Powercreep" (Known DGX Spark Bug)
 
 > **⚠️ Warning / Tip for GB10 Users:**  
@@ -221,8 +224,8 @@ The table below compares full benchmark runs of **`ornith-1.5-35b-a3b-nvfp4`** s
 
 > **⚠️ Crucial Note on Recovery:**  
 > A standard soft reboot (`sudo reboot`) does **NOT** reset the PMIC / VRM voltage regulator state on the GB10 board because the power rails remain energized.  
-> 
 > **To restart the state:** Simply **power off** the machine completely and disconnect/unplug the power supply for **~10 minutes** to allow the power rails and onboard capacitors to fully discharge. Powering back on will return the DGX Spark to its normal state with full compute (~95–100 TFLOP/s) and full throughput (~264 tok/s) restored.
+
 ---
 
 ## Live output
