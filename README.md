@@ -180,6 +180,7 @@ After each benchmark run:
  2   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    NVFP4    264.5 tok/s   171.9 tok/s   94.4 tok/s    74.7%       90.3%      auto
  3   deepseek-v4-flash-0731 vLLM       DGX-Spark    EXL3     34.1 tok/s    34.6 tok/s    34.1 tok/s    79.3%       96.8%      auto
 =====================================================================================================================================
+```
 
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files.)*
 
