@@ -1,4 +1,4 @@
-"""Benchmark orchestrator: throughput (1x + 4x + 8x), tool calling, IFEval, AIME Math, GPQA Diamond, and HumanEval+.
+"""Benchmark orchestrator: throughput (1x + 4x + 8x), tool calling, IFEval, AIME Math, GPQA Diamond, HumanEval+, and Artificial Analysis Intelligence Index.
 
 Prints `METRIC <name>=<value>` lines on stdout; live traces on stderr.
 """
@@ -20,26 +20,46 @@ from typing import Any
 from .grade import (
     answer_correct,
     args_subset,
+    grade_banking,
+    grade_critpt,
+    grade_gdpval,
     grade_gpqa,
     grade_gsm8k,
+    grade_hle,
     grade_humaneval,
     grade_ifeval,
+    grade_lcr,
     grade_no_tool,
+    grade_omniscience,
+    grade_scicode,
+    grade_terminal,
     match_calls,
     parse_args,
 )
 from .live import LiveUI, ReqState, Tracker
 from .scenarios import (
+    BANKING_SCENARIOS,
+    CRITPT_SCENARIOS,
+    GDPVAL_SCENARIOS,
     GPQA_SCENARIOS,
     GSM8K_SCENARIOS,
+    HLE_SCENARIOS,
     HUMANEVAL_SCENARIOS,
     IFEVAL_SCENARIOS,
+    LCR_SCENARIOS,
+    OMNISCIENCE_SCENARIOS,
     SCENARIOS,
+    SCICODE_SCENARIOS,
+    TERMINAL_SCENARIOS,
     THROUGHPUT_PROMPTS,
     TOOLS,
+    create_banking_state,
+    create_terminal_state,
+    execute_banking_tool,
+    execute_terminal_tool,
     execute_tool,
 )
-from .sglang_client import ChatClient
+from .sglang_client import ChatClient, extract_quantization_from_text
 
 DEFAULT_BASE_URL = "http://192.168.1.5:8888"
 
@@ -75,6 +95,29 @@ def _fmt_time(seconds: float) -> str:
     return f"{seconds:.1f}s"
 
 
+def _fmt_tokens(v: int | float | None) -> str:
+    """Compact k/M formatting for token counts (leaderboard columns)."""
+    if v is None:
+        return "N/A"
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return "N/A"
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M"
+    if v >= 1_000:
+        return f"{v / 1_000:.1f}k"
+    return str(v)
+
+
+def _sum_tokens(rows) -> tuple[int, int, int]:
+    """Sum (prompt, completion, reasoning) tokens across result rows."""
+    prompt = sum(r.prompt_tokens for r in rows if not r.error)
+    completion = sum(r.completion_tokens for r in rows if not r.error)
+    reasoning = sum(r.reasoning_tokens for r in rows if not r.error)
+    return prompt, completion, reasoning
+
+
 def _normalize_thinking(val: Any) -> str:
     if val is None:
         return "auto"
@@ -108,39 +151,12 @@ def _detect_quant(model_name: str | None, raw_quant: str | None = None) -> str:
         q = str(raw_quant).strip()
         if q.lower() in ("null", "none", ""):
             return "N/A"
-        return q.upper() if q.lower() in ("nvfp4", "exl3", "fp8", "awq", "gptq", "mxfp4", "bf16", "fp16", "int4", "int8") else q
+        eq = extract_quantization_from_text(q)
+        return eq if eq else q
     if not model_name:
         return "auto"
-    nl = model_name.lower()
-    if "nvfp4" in nl:
-        return "NVFP4"
-    if "exl3" in nl or "deepseek-v4-flash" in nl:
-        return "EXL3"
-    if "fp8" in nl or "nemo-3.5" in nl:
-        return "FP8"
-    if "awq" in nl:
-        return "AWQ"
-    if "gptq" in nl:
-        return "GPTQ"
-    if "mxfp4" in nl:
-        return "MXFP4"
-    if "q4_k_m" in nl:
-        return "Q4_K_M"
-    if "q4_k_s" in nl:
-        return "Q4_K_S"
-    if "q4_k" in nl or "q4_0" in nl or "q4_1" in nl:
-        return "Q4_K"
-    if "q8_0" in nl:
-        return "Q8_0"
-    if "bf16" in nl or "bfloat16" in nl:
-        return "BF16"
-    if "fp16" in nl or "float16" in nl:
-        return "FP16"
-    if "int4" in nl or "4bit" in nl:
-        return "INT4"
-    if "int8" in nl or "8bit" in nl:
-        return "INT8"
-    return "auto"
+    eq = extract_quantization_from_text(model_name)
+    return eq if eq else "auto"
 
 
 def _env_quant() -> str | None:
@@ -190,11 +206,20 @@ class Config:
     @property
     def resolved_quant(self) -> str:
         return _detect_quant(self.model, self.quant)
+
     def should_eval(self, suite: str) -> bool:
-        if self.eval_suites.lower() in ("all", "*"):
+        s = self.eval_suites.strip().lower()
+        if s in ("all", "*"):
             return True
-        active = [s.strip().lower() for s in self.eval_suites.split(",") if s.strip()]
-        return suite.lower() in active
+        active = [x.strip().lower() for x in s.split(",") if x.strip()]
+        suite_l = suite.lower()
+        if "aa-index" in active or "aa_index" in active or "aa" in active:
+            if suite_l in ("gpqa", "critpt", "hle", "banking", "gdpval", "omniscience", "scicode", "terminal", "lcr"):
+                return True
+        if "core" in active:
+            if suite_l in ("tool", "ifeval", "gsm8k", "aime", "gpqa", "humaneval"):
+                return True
+        return suite_l in active
 
 
 @dataclass
@@ -203,6 +228,7 @@ class ScenarioResult:
     category: str
     ok: bool = False
     detail: str = ""
+    prompt_tokens: int = 0
     completion_tokens: int = 0
     reasoning_tokens: int = 0
     error: str = ""
@@ -212,7 +238,7 @@ def _on_chunk(state: ReqState, tracker: Tracker, live: LiveUI, chunk: dict) -> N
     choices = chunk.get("choices") or []
     if choices:
         delta = choices[0].get("delta") or {}
-        rc = delta.get("reasoning_content")
+        rc = delta.get("reasoning_content") or delta.get("reasoning")
         ct = delta.get("content")
         tcs = delta.get("tool_calls")
         if state.status == "pending":
@@ -298,14 +324,13 @@ async def _throughput(client, tracker, live, cfg, concurrency: int):
     return results, wall
 
 
-def _grade(sc: dict, first_calls: list[dict], final_answer: str) -> tuple[bool, str]:
+def _grade_tool(sc: dict, first_calls: list[dict], final_answer: str) -> tuple[bool, str]:
     cat = sc["category"]
     if cat == "no_tool":
         return grade_no_tool(first_calls, final_answer, sc.get("expected_answer"))
     if cat in ("simple", "parallel", "complex_args", "distractor_tools"):
         ok = match_calls(sc["expected_calls"], first_calls)
         return ok, "calls-ok" if ok else f"calls-mismatch got={len(first_calls)}/{len(sc['expected_calls'])}"
-    # multi_turn, error_recovery
     ok = answer_correct(sc["expected_answer"], final_answer)
     return ok, "answer-ok" if ok else "answer-mismatch"
 
@@ -322,6 +347,7 @@ async def _run_scenario(client, tracker, live, cfg, sc) -> ScenarioResult:
     final_answer = ""
     tot_tokens = 0
     tot_reasoning = 0
+    tot_prompt = 0
     try:
         for turn in range(4):
             res = await _run_stream(
@@ -332,10 +358,12 @@ async def _run_scenario(client, tracker, live, cfg, sc) -> ScenarioResult:
             )
             tot_tokens += res.completion_tokens
             tot_reasoning += res.reasoning_tokens
+            tot_prompt += res.prompt_tokens
             if res.error:
                 st.status = "error"
                 return ScenarioResult(id=name, category=sc["category"], error=res.error,
-                                      completion_tokens=tot_tokens, reasoning_tokens=tot_reasoning)
+                                      prompt_tokens=tot_prompt, completion_tokens=tot_tokens,
+                                      reasoning_tokens=tot_reasoning)
             calls = [{"name": tc.name, "arguments": parse_args(tc.arguments)} for tc in res.tool_calls]
             if turn == 0:
                 first_calls = calls
@@ -354,11 +382,12 @@ async def _run_scenario(client, tracker, live, cfg, sc) -> ScenarioResult:
                 continue
             final_answer = res.content
             break
-        ok, detail = _grade(sc, first_calls, final_answer)
+        ok, detail = _grade_tool(sc, first_calls, final_answer)
         st.status = "ok" if ok else "fail"
         st.finish_reason = detail
         return ScenarioResult(id=name, category=sc["category"], ok=ok, detail=detail,
-                              completion_tokens=tot_tokens, reasoning_tokens=tot_reasoning)
+                              prompt_tokens=tot_prompt, completion_tokens=tot_tokens,
+                              reasoning_tokens=tot_reasoning)
     finally:
         st.elapsed_s = time.monotonic() - st.started_at
         st.tps = tot_tokens / st.elapsed_s if st.elapsed_s > 0 else 0.0
@@ -377,11 +406,13 @@ async def _run_eval_suite(client, tracker, live, cfg, scenarios, runner_fn) -> l
     return list(await asyncio.gather(*[_one(sc) for sc in scenarios]))
 
 
+# --- Suite 1: Tool Calling ---
 async def _toolcalls(client, tracker, live, cfg) -> list[ScenarioResult]:
     scenarios = SCENARIOS if cfg.scenario_limit <= 0 else SCENARIOS[: cfg.scenario_limit]
     return await _run_eval_suite(client, tracker, live, cfg, scenarios, _run_scenario)
 
 
+# --- Suite 2: IFEval ---
 async def _one_ifeval(client, tracker, live, cfg, sc) -> ScenarioResult:
     name = sc["id"]
     st = tracker.add(name, "ifeval")
@@ -399,12 +430,14 @@ async def _one_ifeval(client, tracker, live, cfg, sc) -> ScenarioResult:
         if res.error:
             st.status = "error"
             return ScenarioResult(id=name, category="ifeval", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
                                   completion_tokens=res.completion_tokens,
                                   reasoning_tokens=res.reasoning_tokens)
         ok, detail = grade_ifeval(sc["rule_id"], res.content)
         st.status = "ok" if ok else "fail"
         st.finish_reason = detail
         return ScenarioResult(id=name, category="ifeval", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
                               completion_tokens=res.completion_tokens,
                               reasoning_tokens=res.reasoning_tokens)
     finally:
@@ -416,6 +449,7 @@ async def _run_ifeval(client, tracker, live, cfg) -> list[ScenarioResult]:
     return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_ifeval)
 
 
+# --- Suite 3: GSM8K / AIME Math ---
 async def _one_gsm8k(client, tracker, live, cfg, sc) -> ScenarioResult:
     name = sc["id"]
     st = tracker.add(name, "aime")
@@ -433,12 +467,14 @@ async def _one_gsm8k(client, tracker, live, cfg, sc) -> ScenarioResult:
         if res.error:
             st.status = "error"
             return ScenarioResult(id=name, category="aime", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
                                   completion_tokens=res.completion_tokens,
                                   reasoning_tokens=res.reasoning_tokens)
         ok, detail = grade_gsm8k(sc["expected_answer"], res.content)
         st.status = "ok" if ok else "fail"
         st.finish_reason = detail
         return ScenarioResult(id=name, category="aime", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
                               completion_tokens=res.completion_tokens,
                               reasoning_tokens=res.reasoning_tokens)
     finally:
@@ -450,6 +486,7 @@ async def _run_gsm8k(client, tracker, live, cfg) -> list[ScenarioResult]:
     return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_gsm8k)
 
 
+# --- Suite 4: GPQA Diamond ---
 async def _one_gpqa(client, tracker, live, cfg, sc) -> ScenarioResult:
     name = sc["id"]
     st = tracker.add(name, "gpqa")
@@ -467,12 +504,14 @@ async def _one_gpqa(client, tracker, live, cfg, sc) -> ScenarioResult:
         if res.error:
             st.status = "error"
             return ScenarioResult(id=name, category="gpqa", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
                                   completion_tokens=res.completion_tokens,
                                   reasoning_tokens=res.reasoning_tokens)
         ok, detail = grade_gpqa(sc["expected_answer"], res.content)
         st.status = "ok" if ok else "fail"
         st.finish_reason = detail
         return ScenarioResult(id=name, category="gpqa", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
                               completion_tokens=res.completion_tokens,
                               reasoning_tokens=res.reasoning_tokens)
     finally:
@@ -484,6 +523,7 @@ async def _run_gpqa(client, tracker, live, cfg) -> list[ScenarioResult]:
     return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_gpqa)
 
 
+# --- Suite 5: HumanEval+ / LeetCode ---
 async def _one_humaneval(client, tracker, live, cfg, sc) -> ScenarioResult:
     name = sc["id"]
     st = tracker.add(name, "humaneval")
@@ -501,12 +541,14 @@ async def _one_humaneval(client, tracker, live, cfg, sc) -> ScenarioResult:
         if res.error:
             st.status = "error"
             return ScenarioResult(id=name, category="humaneval", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
                                   completion_tokens=res.completion_tokens,
                                   reasoning_tokens=res.reasoning_tokens)
         ok, detail = grade_humaneval(sc["prompt"], sc["test"], res.content)
         st.status = "ok" if ok else "fail"
         st.finish_reason = detail
         return ScenarioResult(id=name, category="humaneval", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
                               completion_tokens=res.completion_tokens,
                               reasoning_tokens=res.reasoning_tokens)
     finally:
@@ -516,6 +558,364 @@ async def _one_humaneval(client, tracker, live, cfg, sc) -> ScenarioResult:
 async def _run_humaneval(client, tracker, live, cfg) -> list[ScenarioResult]:
     scenarios = HUMANEVAL_SCENARIOS if cfg.scenario_limit <= 0 else HUMANEVAL_SCENARIOS[: cfg.scenario_limit]
     return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_humaneval)
+
+
+# --- Suite 6: CritPt (Competition Physics & Reasoning) ---
+async def _one_critpt(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "critpt")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": sc["prompt"]}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="critpt", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_critpt(sc["expected_answer"], res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="critpt", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
+
+
+async def _run_critpt(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = CRITPT_SCENARIOS if cfg.scenario_limit <= 0 else CRITPT_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_critpt)
+
+
+# --- Suite 7: Humanity's Last Exam (HLE) ---
+async def _one_hle(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "hle")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": sc["prompt"]}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="hle", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_hle(sc["expected_answer"], res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="hle", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
+
+
+async def _run_hle(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = HLE_SCENARIOS if cfg.scenario_limit <= 0 else HLE_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_hle)
+
+
+# --- Suite 8: T3-Banking (tau-bench Multi-Turn Stateful Agentic) ---
+async def _run_banking_scenario(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "banking")
+    st.started_at = time.monotonic()
+    db = create_banking_state()
+    tools = [TOOLS[t] for t in sc["tools"]]
+    messages = [dict(m) for m in sc["messages"]]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    first_calls: list[dict] = []
+    final_answer = ""
+    tot_tokens = 0
+    tot_reasoning = 0
+    tot_prompt = 0
+    try:
+        for turn in range(4):
+            res = await _run_stream(
+                client, st, tracker, live, messages,
+                tools=tools, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+                chat_template_kwargs=cfg.thinking_kwargs,
+                reasoning_effort=cfg.reasoning_effort,
+            )
+            tot_tokens += res.completion_tokens
+            tot_reasoning += res.reasoning_tokens
+            tot_prompt += res.prompt_tokens
+            if res.error:
+                st.status = "error"
+                return ScenarioResult(id=name, category="banking", error=res.error,
+                                      prompt_tokens=tot_prompt, completion_tokens=tot_tokens,
+                                      reasoning_tokens=tot_reasoning)
+            calls = [{"name": tc.name, "arguments": parse_args(tc.arguments)} for tc in res.tool_calls]
+            if turn == 0:
+                first_calls = calls
+            assistant = {"role": "assistant", "content": res.content or ""}
+            if res.tool_calls:
+                assistant["tool_calls"] = [
+                    {"id": tc.id or f"call_bk_{turn}_{i}", "type": "function",
+                     "function": {"name": tc.name, "arguments": tc.arguments}}
+                    for i, tc in enumerate(res.tool_calls)
+                ]
+            messages.append(assistant)
+            if res.finish_reason == "tool_calls" and res.tool_calls:
+                for i, tc in enumerate(res.tool_calls):
+                    out = execute_banking_tool(db, tc.name, parse_args(tc.arguments))
+                    messages.append({"role": "tool", "tool_call_id": assistant["tool_calls"][i]["id"], "content": out})
+                continue
+            final_answer = res.content
+            break
+        ok, detail = grade_banking(sc, first_calls, final_answer, db)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="banking", ok=ok, detail=detail,
+                              prompt_tokens=tot_prompt, completion_tokens=tot_tokens,
+                              reasoning_tokens=tot_reasoning)
+    finally:
+        st.elapsed_s = time.monotonic() - st.started_at
+        st.tps = tot_tokens / st.elapsed_s if st.elapsed_s > 0 else 0.0
+        st.completion_tokens = tot_tokens
+        st.reasoning_tokens = tot_reasoning
+        live.note_done(st)
+
+
+async def _run_banking(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = BANKING_SCENARIOS if cfg.scenario_limit <= 0 else BANKING_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _run_banking_scenario)
+
+
+# --- Suite 9: GDPval-AA v2 ---
+async def _one_gdpval(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "gdpval")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": sc["prompt"]}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="gdpval", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_gdpval(sc["rule_id"], res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="gdpval", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
+
+
+async def _run_gdpval(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = GDPVAL_SCENARIOS if cfg.scenario_limit <= 0 else GDPVAL_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_gdpval)
+
+
+# --- Suite 10: AA-Omniscience ---
+async def _one_omniscience(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "omniscience")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": sc["prompt"]}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="omniscience", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_omniscience(sc, res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="omniscience", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
+
+
+async def _run_omniscience(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = OMNISCIENCE_SCENARIOS if cfg.scenario_limit <= 0 else OMNISCIENCE_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_omniscience)
+
+
+# --- Suite 11: SciCode ---
+async def _one_scicode(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "scicode")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": f"Implement the following scientific Python function:\n\n{sc['prompt']}"}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="scicode", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_scicode(sc["entry_point"], sc["prompt"], sc["test"], res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="scicode", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
+
+
+async def _run_scicode(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = SCICODE_SCENARIOS if cfg.scenario_limit <= 0 else SCICODE_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_scicode)
+
+
+# --- Suite 12: Terminal-Bench v4.0 ---
+async def _run_terminal_scenario(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "terminal")
+    st.started_at = time.monotonic()
+    vfs = create_terminal_state()
+    tools = [TOOLS[t] for t in sc["tools"]]
+    messages = [dict(m) for m in sc["messages"]]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    first_calls: list[dict] = []
+    final_answer = ""
+    tot_tokens = 0
+    tot_reasoning = 0
+    tot_prompt = 0
+    try:
+        for turn in range(4):
+            res = await _run_stream(
+                client, st, tracker, live, messages,
+                tools=tools, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+                chat_template_kwargs=cfg.thinking_kwargs,
+                reasoning_effort=cfg.reasoning_effort,
+            )
+            tot_tokens += res.completion_tokens
+            tot_reasoning += res.reasoning_tokens
+            tot_prompt += res.prompt_tokens
+            if res.error:
+                st.status = "error"
+                return ScenarioResult(id=name, category="terminal", error=res.error,
+                                      prompt_tokens=tot_prompt, completion_tokens=tot_tokens,
+                                      reasoning_tokens=tot_reasoning)
+            calls = [{"name": tc.name, "arguments": parse_args(tc.arguments)} for tc in res.tool_calls]
+            if turn == 0:
+                first_calls = calls
+            assistant = {"role": "assistant", "content": res.content or ""}
+            if res.tool_calls:
+                assistant["tool_calls"] = [
+                    {"id": tc.id or f"call_term_{turn}_{i}", "type": "function",
+                     "function": {"name": tc.name, "arguments": tc.arguments}}
+                    for i, tc in enumerate(res.tool_calls)
+                ]
+            messages.append(assistant)
+            if res.finish_reason == "tool_calls" and res.tool_calls:
+                for i, tc in enumerate(res.tool_calls):
+                    out = execute_terminal_tool(vfs, tc.name, parse_args(tc.arguments))
+                    messages.append({"role": "tool", "tool_call_id": assistant["tool_calls"][i]["id"], "content": out})
+                continue
+            final_answer = res.content
+            break
+        ok, detail = grade_terminal(sc, first_calls, final_answer, vfs)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="terminal", ok=ok, detail=detail,
+                              prompt_tokens=tot_prompt, completion_tokens=tot_tokens,
+                              reasoning_tokens=tot_reasoning)
+    finally:
+        st.elapsed_s = time.monotonic() - st.started_at
+        st.tps = tot_tokens / st.elapsed_s if st.elapsed_s > 0 else 0.0
+        st.completion_tokens = tot_tokens
+        st.reasoning_tokens = tot_reasoning
+        live.note_done(st)
+
+
+async def _run_terminal(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = TERMINAL_SCENARIOS if cfg.scenario_limit <= 0 else TERMINAL_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _run_terminal_scenario)
+
+
+# --- Suite 13: AA-LCR (Long Context Reasoning) ---
+async def _one_lcr(client, tracker, live, cfg, sc) -> ScenarioResult:
+    name = sc["id"]
+    st = tracker.add(name, "lcr")
+    st.started_at = time.monotonic()
+    messages = [{"role": "user", "content": sc["prompt"]}]
+    if cfg.system_prompt:
+        messages.insert(0, {"role": "system", "content": cfg.system_prompt})
+    try:
+        res = await _run_stream(
+            client, st, tracker, live, messages,
+            tools=None, max_tokens=cfg.tool_max_tokens, temperature=cfg.temperature,
+            chat_template_kwargs=cfg.thinking_kwargs,
+            reasoning_effort=cfg.reasoning_effort,
+        )
+        if res.error:
+            st.status = "error"
+            return ScenarioResult(id=name, category="lcr", error=res.error,
+                                  prompt_tokens=res.prompt_tokens,
+                                  completion_tokens=res.completion_tokens,
+                                  reasoning_tokens=res.reasoning_tokens)
+        ok, detail = grade_lcr(sc, res.content)
+        st.status = "ok" if ok else "fail"
+        st.finish_reason = detail
+        return ScenarioResult(id=name, category="lcr", ok=ok, detail=detail,
+                              prompt_tokens=res.prompt_tokens,
+                              completion_tokens=res.completion_tokens,
+                              reasoning_tokens=res.reasoning_tokens)
+    finally:
+        live.note_done(st)
+
+
+async def _run_lcr(client, tracker, live, cfg) -> list[ScenarioResult]:
+    scenarios = LCR_SCENARIOS if cfg.scenario_limit <= 0 else LCR_SCENARIOS[: cfg.scenario_limit]
+    return await _run_eval_suite(client, tracker, live, cfg, scenarios, _one_lcr)
 
 
 def _sanitize_name(s: str) -> str:
@@ -542,9 +942,21 @@ def _save_report_md(
     gsm8k_results: list[ScenarioResult] | None,
     gpqa_results: list[ScenarioResult] | None,
     humaneval_results: list[ScenarioResult] | None,
+    critpt_results: list[ScenarioResult] | None,
+    hle_results: list[ScenarioResult] | None,
+    banking_results: list[ScenarioResult] | None,
+    gdpval_results: list[ScenarioResult] | None,
+    omniscience_results: list[ScenarioResult] | None,
+    scicode_results: list[ScenarioResult] | None,
+    terminal_results: list[ScenarioResult] | None,
+    lcr_results: list[ScenarioResult] | None,
     composite_score: float | None,
+    aa_index_score: float | None,
     total_duration_s: float = 0.0,
     sweep_data: list | None = None,
+    token_rows: list | None = None,
+    token_totals: tuple | None = None,
+    quality_per_time: float | None = None,
 ) -> str:
     os.makedirs(cfg.results_dir, exist_ok=True)
     dev_clean = _sanitize_name(cfg.device)
@@ -557,11 +969,25 @@ def _save_report_md(
     date_str = now_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # Compute individual accuracies
-    tool_acc = (sum(1 for r in tool_results if r.ok) / len(tool_results)) if tool_results else None
-    ifeval_acc = (sum(1 for r in ifeval_results if r.ok) / len(ifeval_results)) if ifeval_results else None
-    gsm8k_acc = (sum(1 for r in gsm8k_results if r.ok) / len(gsm8k_results)) if gsm8k_results else None
-    gpqa_acc = (sum(1 for r in gpqa_results if r.ok) / len(gpqa_results)) if gpqa_results else None
-    he_acc = (sum(1 for r in humaneval_results if r.ok) / len(humaneval_results)) if humaneval_results else None
+    def _calc_acc(rs):
+        return (sum(1 for r in rs if r.ok) / len(rs)) if rs else None
+
+    tool_acc = _calc_acc(tool_results)
+    ifeval_acc = _calc_acc(ifeval_results)
+    gsm8k_acc = _calc_acc(gsm8k_results)
+    gpqa_acc = _calc_acc(gpqa_results)
+    he_acc = _calc_acc(humaneval_results)
+    critpt_acc = _calc_acc(critpt_results)
+    hle_acc = _calc_acc(hle_results)
+    banking_acc = _calc_acc(banking_results)
+    gdpval_acc = _calc_acc(gdpval_results)
+    omni_acc = _calc_acc(omniscience_results)
+    scicode_acc = _calc_acc(scicode_results)
+    term_acc = _calc_acc(terminal_results)
+    lcr_acc = _calc_acc(lcr_results)
+
+    token_rows = token_rows or []
+    t_in, t_out, t_reas = token_totals if token_totals is not None else (0, 0, 0)
 
     lines = [
         "---",
@@ -579,12 +1005,25 @@ def _save_report_md(
         f"time_to_first_token_ms: {ttft_ms:.3f}",
         f"total_duration_seconds: {total_duration_s:.3f}",
         f"smart_composite_score: {composite_score:.4f}" if composite_score is not None else "smart_composite_score: null",
+        f"aa_intelligence_index: {aa_index_score:.4f}" if aa_index_score is not None else "aa_intelligence_index: null",
         f"tool_call_accuracy: {tool_acc:.4f}" if tool_acc is not None else "tool_call_accuracy: null",
         f"ifeval_accuracy: {ifeval_acc:.4f}" if ifeval_acc is not None else "ifeval_accuracy: null",
         f"gsm8k_accuracy: {gsm8k_acc:.4f}" if gsm8k_acc is not None else "gsm8k_accuracy: null",
         f"gpqa_accuracy: {gpqa_acc:.4f}" if gpqa_acc is not None else "gpqa_accuracy: null",
         f"humaneval_accuracy: {he_acc:.4f}" if he_acc is not None else "humaneval_accuracy: null",
+        f"critpt_accuracy: {critpt_acc:.4f}" if critpt_acc is not None else "critpt_accuracy: null",
+        f"hle_accuracy: {hle_acc:.4f}" if hle_acc is not None else "hle_accuracy: null",
+        f"banking_accuracy: {banking_acc:.4f}" if banking_acc is not None else "banking_accuracy: null",
+        f"gdpval_accuracy: {gdpval_acc:.4f}" if gdpval_acc is not None else "gdpval_accuracy: null",
+        f"omniscience_accuracy: {omni_acc:.4f}" if omni_acc is not None else "omniscience_accuracy: null",
+        f"scicode_accuracy: {scicode_acc:.4f}" if scicode_acc is not None else "scicode_accuracy: null",
+        f"terminal_accuracy: {term_acc:.4f}" if term_acc is not None else "terminal_accuracy: null",
+        f"lcr_accuracy: {lcr_acc:.4f}" if lcr_acc is not None else "lcr_accuracy: null",
         f"reasoning_ratio: {ratio:.4f}",
+        f"quality_per_time: {quality_per_time:.4f}" if quality_per_time is not None else "quality_per_time: null",
+        f"total_tokens: {t_in + t_out}",
+        f"input_tokens: {t_in}",
+        f"output_tokens: {t_out}",
         "---",
         "",
         f"# Benchmark Report: {cfg.model} on {cfg.device}",
@@ -602,11 +1041,13 @@ def _save_report_md(
     ]
 
     if composite_score is not None:
-        lines.append(f"- **🧠 Composite Intelligence Score:** **`{composite_score * 100:.1f}%`**")
+        lines.append(f"- **Composite Intelligence Score:** **`{composite_score * 100:.1f}%`**")
+    if aa_index_score is not None:
+        lines.append(f"- **Artificial Analysis Intelligence Index:** **`{aa_index_score * 100:.1f}%`**")
 
     lines.extend([
         "",
-        "## ⚡ Throughput Performance",
+        "## Throughput Performance",
         "",
         "| Metric | Value | Details |",
         "|---|---|---|",
@@ -616,8 +1057,38 @@ def _save_report_md(
         f"| **Mean TTFT (8-Concurrent)** | **`{ttft_ms:.1f} ms`** | time to first token |",
         f"| **Total Execution Time** | **`{_fmt_time(total_duration_s)}`** | total benchmark wall-clock time ({total_duration_s:.1f}s) |",
         f"| **Reasoning Ratio** | **`{ratio:.3f}`** | {ratio * 100:.1f}% of generated tokens spent reasoning |",
+        f"| **Quality / Time Efficiency** | **`{quality_per_time:.1f} pts`** | intelligence × time efficiency × token economy (0-100 scale) |" if quality_per_time is not None else "",
         "",
     ])
+
+    lines.extend([
+        "## Token Consumption",
+        "",
+        "| Phase | Input (prompt) | Output (completion) | Reasoning | Total |",
+        "|---|---|---|---|---|",
+    ])
+    for label, r_in, r_out, r_reas in token_rows:
+        lines.append(f"| {label} | {r_in:,} | {r_out:,} | {r_reas:,} | {r_in + r_out:,} |")
+    lines.append(f"| **Total** | **{t_in:,}** | **{t_out:,}** | **{t_reas:,}** | **{t_in + t_out:,}** |")
+    lines.append("")
+
+    # Helper for suite tables
+    def _add_suite_section(title: str, results: list[ScenarioResult], benchmark_label: str, details_label: str):
+        if not results:
+            return
+        tot = len(results)
+        cor = sum(1 for r in results if r.ok)
+        failed = [f"{r.id} ({r.detail})" if r.detail else r.id for r in results if not r.ok]
+        lines.extend([
+            f"## {title}",
+            "",
+            "| Benchmark | Accuracy | Correct / Total | Details |",
+            "|---|---|---|---|",
+            f"| **{benchmark_label}** | **`{(cor / tot) * 100:.1f}%`** | {cor} / {tot} | {details_label} |",
+            "",
+            f"**Failed Scenarios:** `{', '.join(failed) if failed else 'none'}`",
+            "",
+        ])
 
     if tool_results:
         t_tot = len(tool_results)
@@ -627,9 +1098,8 @@ def _save_report_md(
         ag = [r for r in tool_results if r.category in ("multi_turn", "error_recovery")]
         ag_cor = sum(1 for r in ag if r.ok)
         failed_tools = [r.id for r in tool_results if not r.ok]
-
         lines.extend([
-            "## 🛠️ Tool-Calling & Agentic Evaluation (BFCL & tau-bench)",
+            "## Tool-Calling & Agentic Evaluation (BFCL & tau-bench)",
             "",
             "| Category | Accuracy | Correct / Total | Details |",
             "|---|---|---|---|",
@@ -639,85 +1109,34 @@ def _save_report_md(
             lines.append(f"| **Single-Turn (Simple / Parallel / Restraint / Complex / Distractors)** | **`{(sp_cor / len(sp)) * 100:.1f}%`** | {sp_cor} / {len(sp)} | Tool selection, args, restraint, distractors & schemas |")
         if ag:
             lines.append(f"| **Agentic Multi-Turn (Execution, Chains & Error Recovery)** | **`{(ag_cor / len(ag)) * 100:.1f}%`** | {ag_cor} / {len(ag)} | Multi-step dependency chains & stateful rollback |")
-        lines.extend([
-            "",
-            f"**Failed Scenarios:** `{', '.join(failed_tools) if failed_tools else 'none'}`",
-            "",
-        ])
+        lines.extend(["", f"**Failed Scenarios:** `{', '.join(failed_tools) if failed_tools else 'none'}`", ""])
 
-    if ifeval_results:
-        i_tot = len(ifeval_results)
-        i_cor = sum(1 for r in ifeval_results if r.ok)
-        failed_ifeval = [f"{r.id} ({r.detail})" for r in ifeval_results if not r.ok]
-        lines.extend([
-            "## 📋 Instruction Following (Google IFEval Hard)",
-            "",
-            "| Benchmark | Accuracy | Correct / Total | Details |",
-            "|---|---|---|---|",
-            f"| **IFEval Hard Constraints** | **`{(i_cor / i_tot) * 100:.1f}%`** | {i_cor} / {i_tot} | Multi-constraint conjunctions, JSON ranges, negative constraints |",
-            "",
-            f"**Failed Constraints:** `{', '.join(failed_ifeval) if failed_ifeval else 'none'}`",
-            "",
-        ])
-
-    if gsm8k_results:
-        g_tot = len(gsm8k_results)
-        g_cor = sum(1 for r in gsm8k_results if r.ok)
-        failed_gsm8k = [f"{r.id} ({r.detail})" for r in gsm8k_results if not r.ok]
-        lines.extend([
-            "## 🔢 Math Reasoning (AIME & Competition Math)",
-            "",
-            "| Benchmark | Accuracy | Correct / Total | Details |",
-            "|---|---|---|---|",
-            f"| **AIME / Competition Math** | **`{(g_cor / g_tot) * 100:.1f}%`** | {g_cor} / {g_tot} | Modular arithmetic, combinatorics, algebra & geometry proofs |",
-            "",
-            f"**Failed Problems:** `{', '.join(failed_gsm8k) if failed_gsm8k else 'none'}`",
-            "",
-        ])
-
-    if gpqa_results:
-        gp_tot = len(gpqa_results)
-        gp_cor = sum(1 for r in gpqa_results if r.ok)
-        failed_gpqa = [f"{r.id} ({r.detail})" for r in gpqa_results if not r.ok]
-        lines.extend([
-            "## 🔬 PhD Science Reasoning (GPQA Diamond)",
-            "",
-            "| Benchmark | Accuracy | Correct / Total | Details |",
-            "|---|---|---|---|",
-            f"| **GPQA Diamond (Physics / Chem / Bio)** | **`{(gp_cor / gp_tot) * 100:.1f}%`** | {gp_cor} / {gp_tot} | Google-proof PhD-level deduction & domain reasoning |",
-            "",
-            f"**Failed Questions:** `{', '.join(failed_gpqa) if failed_gpqa else 'none'}`",
-            "",
-        ])
-
-    if humaneval_results:
-        h_tot = len(humaneval_results)
-        h_cor = sum(1 for r in humaneval_results if r.ok)
-        failed_he = [f"{r.id} ({r.detail})" for r in humaneval_results if not r.ok]
-        lines.extend([
-            "## 💻 Code Intelligence (HumanEval+ Data Structures)",
-            "",
-            "| Benchmark | Accuracy | Correct / Total | Details |",
-            "|---|---|---|---|",
-            f"| **HumanEval+ Code & Data Structures** | **`{(h_cor / h_tot) * 100:.1f}%`** | {h_cor} / {h_tot} | LRUCache, MinStack, Trie, interval merging with test execution |",
-            "",
-            f"**Failed Unit Tests:** `{', '.join(failed_he) if failed_he else 'none'}`",
-            "",
-        ])
+    _add_suite_section("Instruction Following (Google IFEval Hard)", ifeval_results, "IFEval Hard Constraints", "Multi-constraint conjunctions, JSON ranges, negative constraints")
+    _add_suite_section("Math Reasoning (AIME & Competition Math)", gsm8k_results, "AIME / Competition Math", "Modular arithmetic, combinatorics, algebra & geometry proofs")
+    _add_suite_section("PhD Science Reasoning (GPQA Diamond)", gpqa_results, "GPQA Diamond (Physics / Chem / Bio)", "Google-proof PhD-level deduction & domain reasoning")
+    _add_suite_section("Code Intelligence (HumanEval+ Data Structures)", humaneval_results, "HumanEval+ Code & Data Structures", "LRUCache, MinStack, Trie, interval merging with test execution")
+    _add_suite_section("Advanced Physics & Math Reasoning (CritPt)", critpt_results, "CritPt Competition Physics", "Phase transitions, relativistic Doppler, thermodynamics, harmonic oscillator")
+    _add_suite_section("Frontier Multidisciplinary PhD Exam (Humanity's Last Exam)", hle_results, "Humanity's Last Exam (HLE)", "Game theory, algebraic topology, provability logic, black holes, genetics")
+    _add_suite_section("Stateful Banking Agent (T3-Banking / tau-bench)", banking_results, "T3-Banking Agent", "Multi-turn bank DB mutations, fee waivers, card freeze & dispute workflows")
+    _add_suite_section("White-Collar Economic Audits (GDPval-AA v2)", gdpval_results, "GDPval-AA v2 Workflows", "Balance sheet reconciliation, vendor SLA audit, SaaS metrics, payroll tax")
+    _add_suite_section("Hallucination Restraint & Adversarial Traps (AA-Omniscience)", omniscience_results, "AA-Omniscience Traps", "Counterfactual false premises, fictional entities, precise scientific recall")
+    _add_suite_section("Scientific Python Computing (SciCode)", scicode_results, "SciCode Scientific Programming", "Quantum purity, Lennard-Jones, RK4 integrator, diffusion & matrix math")
+    _add_suite_section("Interactive CLI & Terminal Agent (Terminal-Bench v4.0)", terminal_results, "Terminal-Bench CLI Agent", "VFS log triage, nginx syntax repair, git merge conflict resolution, JSON migration")
+    _add_suite_section("Long-Context Reasoning & Retrieval (AA-LCR)", lcr_results, "AA-LCR Long Context", "Multi-document timeline synthesis, incident root cause, procurement liability")
 
     if sweep_data:
         lines.extend([
-            "## 📈 Concurrency Scaling",
+            "## Concurrency Scaling",
             "",
             "| Concurrency | Throughput (tok/s) |",
             "|---|---|",
         ])
-        for level, tps in sweep_data:
+        for level, tps, *_ in sweep_data:
             lines.append(f"| {level} streams | {tps:.1f} tok/s |")
         lines.append("")
 
     lines.extend([
-        "## 📊 Machine-Readable Metrics",
+        "## Machine-Readable Metrics",
         "",
         "```",
         f"METRIC tokens_per_second={conc8_tps:.3f}",
@@ -729,6 +1148,8 @@ def _save_report_md(
     ])
     if composite_score is not None:
         lines.append(f"METRIC smart_composite_score={composite_score:.4f}")
+    if aa_index_score is not None:
+        lines.append(f"METRIC aa_intelligence_index={aa_index_score:.4f}")
     if tool_acc is not None:
         lines.append(f"METRIC tool_call_accuracy={tool_acc:.4f}")
     if ifeval_acc is not None:
@@ -739,8 +1160,27 @@ def _save_report_md(
         lines.append(f"METRIC gpqa_accuracy={gpqa_acc:.4f}")
     if he_acc is not None:
         lines.append(f"METRIC humaneval_accuracy={he_acc:.4f}")
+    if critpt_acc is not None:
+        lines.append(f"METRIC critpt_accuracy={critpt_acc:.4f}")
+    if hle_acc is not None:
+        lines.append(f"METRIC hle_accuracy={hle_acc:.4f}")
+    if banking_acc is not None:
+        lines.append(f"METRIC banking_accuracy={banking_acc:.4f}")
+    if gdpval_acc is not None:
+        lines.append(f"METRIC gdpval_accuracy={gdpval_acc:.4f}")
+    if omni_acc is not None:
+        lines.append(f"METRIC omniscience_accuracy={omni_acc:.4f}")
+    if scicode_acc is not None:
+        lines.append(f"METRIC scicode_accuracy={scicode_acc:.4f}")
+    if term_acc is not None:
+        lines.append(f"METRIC terminal_accuracy={term_acc:.4f}")
+    if lcr_acc is not None:
+        lines.append(f"METRIC lcr_accuracy={lcr_acc:.4f}")
+    if quality_per_time is not None:
+        lines.append(f"METRIC quality_per_time={quality_per_time:.4f}")
     lines.extend([
         f"METRIC reasoning_ratio={ratio:.4f}",
+        f"METRIC total_tokens={t_in + t_out}",
         "```",
         "",
     ])
@@ -782,7 +1222,6 @@ def _parse_frontmatter(content: str) -> dict | None:
             data["quant"] = _detect_quant(data.get("model"))
     elif data["quant"] is not None:
         data["quant"] = str(data["quant"]).strip()
-
     if "thinking" not in data:
         match = re.search(r"\*\*Thinking Mode:\*\*\s*`([^`]+)`", content)
         if match:
@@ -793,6 +1232,15 @@ def _parse_frontmatter(content: str) -> dict | None:
             data["thinking"] = "auto"
     else:
         data["thinking"] = _normalize_thinking(data["thinking"])
+
+    if "quality_per_time" not in data or data["quality_per_time"] is None:
+        comp = data.get("smart_composite_score")
+        dur = data.get("total_duration_seconds")
+        toks = data.get("total_tokens")
+        if comp is not None and dur is not None and toks is not None and float(dur) > 0 and float(toks) > 0:
+            e_time = (600.0 / max(300.0, float(dur))) ** 0.5
+            e_tok = (170000.0 / max(50000.0, float(toks))) ** 0.3
+            data["quality_per_time"] = min(100.0, (float(comp) * 100.0) * e_time * e_tok)
     return data
 
 
@@ -808,6 +1256,18 @@ def _format_thinking(m: dict) -> str:
     if raw is None:
         return "N/A"
     return _normalize_thinking(raw)
+
+
+ALL_SUITE_METRIC_KEYS = (
+    "tool_call_accuracy", "ifeval_accuracy", "gsm8k_accuracy", "gpqa_accuracy", "humaneval_accuracy",
+    "critpt_accuracy", "hle_accuracy", "banking_accuracy", "gdpval_accuracy", "omniscience_accuracy",
+    "scicode_accuracy", "terminal_accuracy", "lcr_accuracy"
+)
+
+
+def _count_evaluated_suites(m: dict) -> int:
+    return sum(1 for k in ALL_SUITE_METRIC_KEYS if m.get(k) is not None)
+
 
 def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
     if not os.path.isdir(results_dir):
@@ -830,7 +1290,7 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
     if not entries:
         return
 
-    # Deduplicate by (model, device, quant, thinking) keeping the entry with highest composite score or tool_call_accuracy
+    # Deduplicate by (model, device, quant, thinking) keeping the entry with highest composite score or aa index
     unique: dict[tuple[str, str, str, str], dict] = {}
     for e in entries:
         m_name = str(e.get("model") or "")
@@ -842,23 +1302,30 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
             unique[key] = e
         else:
             existing = unique[key]
-            e_comp = float(e.get("smart_composite_score") or e.get("tool_call_accuracy") or 0)
-            ex_comp = float(existing.get("smart_composite_score") or existing.get("tool_call_accuracy") or 0)
+            e_comp = float(e.get("smart_composite_score") or e.get("aa_intelligence_index") or e.get("tool_call_accuracy") or 0)
+            ex_comp = float(existing.get("smart_composite_score") or existing.get("aa_intelligence_index") or existing.get("tool_call_accuracy") or 0)
             if e_comp >= ex_comp:
                 unique[key] = e
 
     all_records = list(unique.values())
+    def _smartest_sort_key(m: dict):
+        aa_idx = m.get("aa_intelligence_index")
+        comp = m.get("smart_composite_score")
+        suites_cnt = _count_evaluated_suites(m)
+        tps = float(m.get("tokens_per_second") or m.get("conc8_tps") or 0.0)
 
-    # Top 3 Smartest: by smart_composite_score desc, tool_call_accuracy desc, tokens_per_second desc
-    smartest = sorted(
-        all_records,
-        key=lambda x: (
-            float(x.get("smart_composite_score") if x.get("smart_composite_score") is not None else (x.get("tool_call_accuracy") or 0)),
-            float(x.get("tool_call_accuracy") or 0),
-            float(x.get("tokens_per_second") or 0),
-        ),
-        reverse=True,
-    )[:3]
+        # Pure intelligence ranking: prioritize AA-Index (frontier exam) and Composite Score
+        if aa_idx is not None:
+            primary_score = float(aa_idx)
+        elif comp is not None:
+            primary_score = float(comp)
+        else:
+            primary_score = 0.0
+
+        comp_score = float(comp or aa_idx or 0.0)
+        return (primary_score, comp_score, suites_cnt, tps)
+
+    smartest = sorted(all_records, key=_smartest_sort_key, reverse=True)[:3]
 
     # Top 3 Fastest: by tokens_per_second desc, single_stream_tps desc, smart_composite_score desc
     fastest = sorted(
@@ -867,38 +1334,39 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
             float(x.get("tokens_per_second") or x.get("conc8_tps") or x.get("conc4_tps") or 0),
             float(x.get("conc4_tps") or 0),
             float(x.get("single_stream_tps") or 0),
-            float(x.get("smart_composite_score") if x.get("smart_composite_score") is not None else (x.get("tool_call_accuracy") or 0)),
+            float(x.get("smart_composite_score") if x.get("smart_composite_score") is not None else (x.get("aa_intelligence_index") or 0)),
         ),
         reverse=True,
     )[:3]
 
     print()
-    print("=" * 133)
-    print("🏆 Top 3 Smartest Models (Composite Intelligence Score: Tool, IFEval, AIME Math, GPQA, HumanEval+)")
-    print("=" * 133)
-    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Quant':<8} {'Composite':<11} {'Tool Acc':<10} {'IFEval':<9} {'AIME':<8} {'GPQA':<8} {'HumanEval+':<11} {'Thinking'}")
-    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*8:<8} {'-'*11:<11} {'-'*10:<10} {'-'*9:<9} {'-'*8:<8} {'-'*8:<8} {'-'*11:<11} {'-'*8}")
+    print("=" * 143)
+    print("Top 3 Smartest Models (Composite Intelligence & Artificial Analysis Index)")
+    print("=" * 143)
+    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Quant':<8} {'Composite':<11} {'AA-Index':<10} {'Q/Time':<8} {'Tool Acc':<10} {'GPQA':<8} {'HLE':<8} {'Thinking':<8} {'Tokens'}")
+    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*8:<8} {'-'*11:<11} {'-'*10:<10} {'-'*8:<8} {'-'*10:<10} {'-'*8:<8} {'-'*8:<8} {'-'*8:<8} {'-'*6}")
     for i, m in enumerate(smartest, 1):
         model_str = str(m.get("model", "unknown"))[:22]
         eng_str = str(m.get("engine", "unknown"))[:10]
         dev_str = str(m.get("device", "unknown"))[:12]
         q_str = _format_quant(m)
         th_str = _format_thinking(m)
-        raw_comp = m.get("smart_composite_score") if m.get("smart_composite_score") is not None else m.get("tool_call_accuracy")
+        raw_comp = m.get("smart_composite_score")
         comp_val = f"{float(raw_comp) * 100:.1f}%" if raw_comp is not None else "N/A"
+        raw_aa = m.get("aa_intelligence_index")
+        aa_val = f"{float(raw_aa) * 100:.1f}%" if raw_aa is not None else "N/A"
+        q_time_val = f"{float(m['quality_per_time']):.1f} pts" if m.get("quality_per_time") is not None else "N/A"
         tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
-        ifeval_acc = f"{float(m['ifeval_accuracy']) * 100:.1f}%" if m.get("ifeval_accuracy") is not None else "N/A"
-        gsm8k_acc = f"{float(m['gsm8k_accuracy']) * 100:.1f}%" if m.get("gsm8k_accuracy") is not None else "N/A"
         gpqa_acc = f"{float(m['gpqa_accuracy']) * 100:.1f}%" if m.get("gpqa_accuracy") is not None else "N/A"
-        he_acc = f"{float(m['humaneval_accuracy']) * 100:.1f}%" if m.get("humaneval_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {q_str:<8} {comp_val:<11} {tool_acc:<10} {ifeval_acc:<9} {gsm8k_acc:<8} {gpqa_acc:<8} {he_acc:<11} {th_str}")
-
+        hle_acc = f"{float(m['hle_accuracy']) * 100:.1f}%" if m.get("hle_accuracy") is not None else "N/A"
+        tok_str = _fmt_tokens(m.get("total_tokens"))
+        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {q_str:<8} {comp_val:<11} {aa_val:<10} {q_time_val:<8} {tool_acc:<10} {gpqa_acc:<8} {hle_acc:<8} {th_str:<8} {tok_str}")
     print()
-    print("=" * 133)
-    print("⚡ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)")
-    print("=" * 133)
-    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Quant':<8} {'8-Conc t/s':<13} {'4-Conc t/s':<13} {'Single t/s':<13} {'Composite':<11} {'Tool Acc':<10} {'Thinking'}")
-    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*8:<8} {'-'*13:<13} {'-'*13:<13} {'-'*13:<13} {'-'*11:<11} {'-'*10:<10} {'-'*8}")
+    print("=" * 143)
+    print("Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)")
+    print("=" * 143)
+    print(f" {'#':<3} {'Model':<22} {'Engine':<10} {'Device':<12} {'Quant':<8} {'8-Conc t/s':<13} {'4-Conc t/s':<13} {'Single t/s':<13} {'Composite':<11} {'AA-Index':<10} {'Q/Time':<8} {'Thinking':<8} {'Tokens'}")
+    print(f" {'-':<3} {'-'*22:<22} {'-'*10:<10} {'-'*12:<12} {'-'*8:<8} {'-'*13:<13} {'-'*13:<13} {'-'*13:<13} {'-'*11:<11} {'-'*10:<10} {'-'*8:<8} {'-'*8:<8} {'-'*6}")
     for i, m in enumerate(fastest, 1):
         model_str = str(m.get("model", "unknown"))[:22]
         eng_str = str(m.get("engine", "unknown"))[:10]
@@ -911,11 +1379,71 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
         c4_str = f"{float(c4_val):.1f} tok/s" if c4_val is not None else "N/A"
         s_val = m.get("single_stream_tps")
         s_str = f"{float(s_val):.1f} tok/s" if s_val is not None else "N/A"
-        raw_comp = m.get("smart_composite_score") if m.get("smart_composite_score") is not None else m.get("tool_call_accuracy")
+        raw_comp = m.get("smart_composite_score")
         comp_val = f"{float(raw_comp) * 100:.1f}%" if raw_comp is not None else "N/A"
-        tool_acc = f"{float(m['tool_call_accuracy']) * 100:.1f}%" if m.get("tool_call_accuracy") is not None else "N/A"
-        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {q_str:<8} {c8_str:<13} {c4_str:<13} {s_str:<13} {comp_val:<11} {tool_acc:<10} {th_str}")
-    print("=" * 133)
+        raw_aa = m.get("aa_intelligence_index")
+        aa_val = f"{float(raw_aa) * 100:.1f}%" if raw_aa is not None else "N/A"
+        q_time_val = f"{float(m['quality_per_time']):.1f} pts" if m.get("quality_per_time") is not None else "N/A"
+        tok_str = _fmt_tokens(m.get("total_tokens"))
+        print(f" {i:<3} {model_str:<22} {eng_str:<10} {dev_str:<12} {q_str:<8} {c8_str:<13} {c4_str:<13} {s_str:<13} {comp_val:<11} {aa_val:<10} {q_time_val:<8} {th_str:<8} {tok_str}")
+    print("=" * 143)
+
+    def _find_champion(keys: list[str], detail_formatters: list[tuple[str, str]], mode: str = "pure_accuracy") -> str | None:
+        best_model = None
+        best_score = -1.0
+        for r in all_records:
+            vals = [float(r[k]) for k in keys if r.get(k) is not None]
+            if vals:
+                base_score = (sum(vals) / len(vals)) * (1.0 + 0.05 * (len(vals) - 1))
+                if mode == "agentic_speed":
+                    s_tps = float(r.get("single_stream_tps") or 30.0)
+                    speed_factor = 0.60 + 0.40 * min(1.0, s_tps / 75.0)
+                    score = base_score * speed_factor
+                else:
+                    score = base_score
+                if score > best_score:
+                    best_score = score
+                    best_model = r
+        if not best_model:
+            return None
+        details = []
+        for key, label in detail_formatters:
+            if best_model.get(key) is not None:
+                val = float(best_model[key])
+                if key in ("tokens_per_second", "conc8_tps", "conc4_tps", "single_stream_tps"):
+                    details.append(f"{val:.1f} {label}")
+                elif "quality" in key or "efficiency" in key:
+                    details.append(f"{val:.1f} {label}")
+                else:
+                    details.append(f"{val * 100:.1f}% {label}")
+        m_name = str(best_model.get("model", "unknown"))[:22]
+        eng = str(best_model.get("engine", "unknown"))[:10]
+        q = _format_quant(best_model)
+        return f"{m_name:<22} [{eng:<8} {q:<6}] — {' • '.join(details)}"
+
+    agentic_champ = _find_champion(["tool_call_accuracy", "banking_accuracy", "terminal_accuracy"], [("tool_call_accuracy", "Tool Acc"), ("banking_accuracy", "Banking"), ("terminal_accuracy", "Terminal")], mode="agentic_speed")
+    science_champ = _find_champion(["gpqa_accuracy", "critpt_accuracy", "gsm8k_accuracy"], [("critpt_accuracy", "CritPt"), ("gpqa_accuracy", "GPQA"), ("gsm8k_accuracy", "AIME")], mode="pure_accuracy")
+    reason_champ = _find_champion(["hle_accuracy", "gdpval_accuracy", "ifeval_accuracy"], [("ifeval_accuracy", "IFEval"), ("gdpval_accuracy", "GDPval"), ("hle_accuracy", "HLE")], mode="pure_accuracy")
+    code_champ = _find_champion(["humaneval_accuracy", "scicode_accuracy"], [("humaneval_accuracy", "HumanEval+"), ("scicode_accuracy", "SciCode")], mode="pure_accuracy")
+    speed_champ = _find_champion(["tokens_per_second", "conc8_tps"], [("tokens_per_second", "8-Conc tok/s"), ("single_stream_tps", "Single tok/s")], mode="pure_accuracy")
+    eff_champ = _find_champion(["quality_per_time"], [("quality_per_time", "pts Quality/Time")], mode="pure_accuracy")
+    print()
+    print("=" * 143)
+    print("Domain Excellence Champions & Badges")
+    print("=" * 143)
+    if agentic_champ:
+        print(f" • [Agentic & Banking Master] : {agentic_champ}")
+    if science_champ:
+        print(f" • [Science & Physics Leader] : {science_champ}")
+    if reason_champ:
+        print(f" • [Frontier PhD Reasoning]   : {reason_champ}")
+    if code_champ:
+        print(f" • [Code Intelligence Leader] : {code_champ}")
+    if speed_champ:
+        print(f" • [Raw Throughput Speed King]: {speed_champ}")
+    if eff_champ:
+        print(f" • [Quality/Time Efficiency]  : {eff_champ}")
+    print("=" * 143)
 
 
 def _report(
@@ -928,6 +1456,14 @@ def _report(
     gsm8k_results: list[ScenarioResult] | None,
     gpqa_results: list[ScenarioResult] | None,
     humaneval_results: list[ScenarioResult] | None,
+    critpt_results: list[ScenarioResult] | None = None,
+    hle_results: list[ScenarioResult] | None = None,
+    banking_results: list[ScenarioResult] | None = None,
+    gdpval_results: list[ScenarioResult] | None = None,
+    omniscience_results: list[ScenarioResult] | None = None,
+    scicode_results: list[ScenarioResult] | None = None,
+    terminal_results: list[ScenarioResult] | None = None,
+    lcr_results: list[ScenarioResult] | None = None,
     total_duration_s: float = 0.0,
     sweep_data: list | None = None,
 ) -> int:
@@ -966,32 +1502,81 @@ def _report(
     ttft_ms = (sum(ttfts) / len(ttfts) * 1000.0) if ttfts else 0.0
 
     # Accuracies
-    tool_acc = (sum(1 for r in tool_results if r.ok) / len(tool_results)) if tool_results else None
-    sp_items = [r for r in tool_results if r.category in ("simple", "parallel", "complex_args", "no_tool", "distractor_tools")] if tool_results else []
-    sp_acc = (sum(1 for r in sp_items if r.ok) / len(sp_items)) if sp_items else None
-    ag_items = [r for r in tool_results if r.category in ("multi_turn", "error_recovery")] if tool_results else []
-    ag_acc = (sum(1 for r in ag_items if r.ok) / len(ag_items)) if ag_items else None
+    def _calc_acc(rs):
+        return (sum(1 for r in rs if r.ok) / len(rs)) if rs else None
 
-    ifeval_acc = (sum(1 for r in ifeval_results if r.ok) / len(ifeval_results)) if ifeval_results else None
-    gsm8k_acc = (sum(1 for r in gsm8k_results if r.ok) / len(gsm8k_results)) if gsm8k_results else None
-    gpqa_acc = (sum(1 for r in gpqa_results if r.ok) / len(gpqa_results)) if gpqa_results else None
-    he_acc = (sum(1 for r in humaneval_results if r.ok) / len(humaneval_results)) if humaneval_results else None
+    tool_acc = _calc_acc(tool_results)
+    ifeval_acc = _calc_acc(ifeval_results)
+    gsm8k_acc = _calc_acc(gsm8k_results)
+    gpqa_acc = _calc_acc(gpqa_results)
+    he_acc = _calc_acc(humaneval_results)
+    critpt_acc = _calc_acc(critpt_results)
+    hle_acc = _calc_acc(hle_results)
+    banking_acc = _calc_acc(banking_results)
+    gdpval_acc = _calc_acc(gdpval_results)
+    omni_acc = _calc_acc(omniscience_results)
+    scicode_acc = _calc_acc(scicode_results)
+    term_acc = _calc_acc(terminal_results)
+    lcr_acc = _calc_acc(lcr_results)
 
     # Composite intelligence score (mean of all evaluated suites)
-    smart_scores = [a for a in (tool_acc, ifeval_acc, gsm8k_acc, gpqa_acc, he_acc) if a is not None]
-    composite_score = (sum(smart_scores) / len(smart_scores)) if smart_scores else None
+    all_accuracies = [a for a in (tool_acc, ifeval_acc, gsm8k_acc, gpqa_acc, he_acc,
+                                  critpt_acc, hle_acc, banking_acc, gdpval_acc,
+                                  omni_acc, scicode_acc, term_acc, lcr_acc) if a is not None]
+    composite_score = (sum(all_accuracies) / len(all_accuracies)) if all_accuracies else None
+
+    # Artificial Analysis Index score (mean of the 9 AA suites)
+    aa_accuracies = [a for a in (gpqa_acc, critpt_acc, hle_acc, banking_acc, gdpval_acc,
+                                omni_acc, scicode_acc, term_acc, lcr_acc) if a is not None]
+    aa_index_score = (sum(aa_accuracies) / len(aa_accuracies)) if aa_accuracies else None
 
     # Reasoning ratio across all runs
-    all_eval_scenarios = (tool_results or []) + (ifeval_results or []) + (gsm8k_results or []) + (gpqa_results or []) + (humaneval_results or [])
+    all_eval_scenarios = (
+        (tool_results or []) + (ifeval_results or []) + (gsm8k_results or []) +
+        (gpqa_results or []) + (humaneval_results or []) + (critpt_results or []) +
+        (hle_results or []) + (banking_results or []) + (gdpval_results or []) +
+        (omniscience_results or []) + (scicode_results or []) +
+        (terminal_results or []) + (lcr_results or [])
+    )
     c_tok_total = sum(tok_sum(results) for results, _ in conc4_reps) + sum(tok_sum(results) for results, _ in conc8_reps)
     c_reas_total = sum(reas_sum(results) for results, _ in conc4_reps) + sum(reas_sum(results) for results, _ in conc8_reps)
     all_tok = s_tok + c_tok_total + sum(r.completion_tokens for r in all_eval_scenarios)
     all_reas = reas_sum(single) + c_reas_total + sum(r.reasoning_tokens for r in all_eval_scenarios)
     ratio = min(1.0, all_reas / all_tok) if all_tok else 0.0
 
+    # Token accounting across the whole run (input / output / reasoning)
+    tp1 = _sum_tokens(single)
+    tp4 = _sum_tokens([r for results, _ in conc4_reps for r in results])
+    tp8 = _sum_tokens([r for results, _ in conc8_reps for r in results])
+    ev_in, ev_out, ev_reas = _sum_tokens(all_eval_scenarios)
+    sw_in = sum(x[2] for x in sweep_data) if sweep_data else 0
+    sw_out = sum(x[3] for x in sweep_data) if sweep_data else 0
+    sw_reas = sum(x[4] for x in sweep_data) if sweep_data else 0
+    total_in = tp1[0] + tp4[0] + tp8[0] + ev_in + sw_in
+    total_out = tp1[1] + tp4[1] + tp8[1] + ev_out + sw_out
+    total_reas = tp1[2] + tp4[2] + tp8[2] + ev_reas + sw_reas
+    total_tokens = total_in + total_out
+
+    # Quality / Time Efficiency Score: intelligence achieved scaled by wall-clock time & token conciseness (0-100 pts)
+    quality_per_time = (
+        min(100.0, (composite_score * 100.0) * ((600.0 / max(300.0, total_duration_s)) ** 0.5) * ((170000.0 / max(50000.0, total_tokens)) ** 0.3))
+        if (composite_score is not None and total_tokens > 0 and total_duration_s > 0)
+        else None
+    )
+
+    token_rows: list[tuple[str, int, int, int]] = [
+        ("Throughput single (1x)", tp1[0], tp1[1], tp1[2]),
+        (f"Throughput 4x ({len(conc4_reps)} reps)", tp4[0], tp4[1], tp4[2]),
+        (f"Throughput {cfg.concurrency}x ({len(conc8_reps)} reps)", tp8[0], tp8[1], tp8[2]),
+    ]
+    if all_eval_scenarios:
+        token_rows.append(("Intelligence suites", ev_in, ev_out, ev_reas))
+    if sweep_data:
+        token_rows.append(("Concurrency sweep", sw_in, sw_out, sw_reas))
+
     print()
     print("=" * 66)
-    print("📊 AGENTIC & INTELLIGENCE BENCHMARK SUMMARY")
+    print("AGENTIC & INTELLIGENCE BENCHMARK SUMMARY")
     print("=" * 66)
     print(f"endpoint : {cfg.base_url}")
     print(f"engine   : {cfg.engine or 'auto'}")
@@ -1000,37 +1585,49 @@ def _report(
     print(f"thinking : {'on' if cfg.enable_thinking else 'off'}")
 
     print()
-    print("--- ⚡ Throughput ---")
+    print("--- Throughput ---")
     print(f"throughput single stream : {single_tps:.2f} tok/s ({s_tok} tok)")
     print(f"throughput 4-concurrent  : {conc4_tps:.2f} tok/s (median of {len(conc4_reps)} reps; spread {lo4:.1f}-{hi4:.1f})")
     print(f"throughput 8-concurrent  : {conc8_tps:.2f} tok/s (median of {len(conc8_reps)} reps; spread {lo8:.1f}-{hi8:.1f})")
     print(f"mean TTFT (8-concurrent) : {ttft_ms:.1f} ms")
     print(f"total execution time     : {_fmt_time(total_duration_s)} ({total_duration_s:.1f}s)")
     print(f"reasoning ratio          : {ratio:.3f} ({ratio * 100:.1f}%)")
+    print(f"tokens used              : {total_tokens:,} total ({total_in:,} input / {total_out:,} output / {total_reas:,} reasoning)")
+    if quality_per_time is not None:
+        print(f"quality / time efficiency: {quality_per_time:.1f} pts ({composite_score * 100:.1f}% / {total_tokens:,} tok / {_fmt_time(total_duration_s)})")
 
     print()
-    print("--- 🧠 Intelligence Breakdown ---")
+    print("--- Intelligence Breakdown ---")
     if composite_score is not None:
         print(f"Composite Intelligence   : {composite_score * 100:.1f}%")
+    if aa_index_score is not None:
+        print(f"Artificial Analysis Index: {aa_index_score * 100:.1f}%")
     if tool_acc is not None:
-        t_cor = sum(1 for r in tool_results if r.ok)
-        print(f"Tool-Call Accuracy       : {t_cor}/{len(tool_results)} = {tool_acc * 100:.1f}%")
-        if sp_acc is not None:
-            print(f"  single-turn restraint  : {sp_acc * 100:.1f}%")
-        if ag_acc is not None:
-            print(f"  agentic multi-turn     : {ag_acc * 100:.1f}%")
+        print(f"Tool-Call Accuracy       : {sum(1 for r in tool_results if r.ok)}/{len(tool_results)} = {tool_acc * 100:.1f}%")
     if ifeval_acc is not None:
-        i_cor = sum(1 for r in ifeval_results if r.ok)
-        print(f"IFEval (Hard Rules)      : {i_cor}/{len(ifeval_results)} = {ifeval_acc * 100:.1f}%")
+        print(f"IFEval (Hard Rules)      : {sum(1 for r in ifeval_results if r.ok)}/{len(ifeval_results)} = {ifeval_acc * 100:.1f}%")
     if gsm8k_acc is not None:
-        g_cor = sum(1 for r in gsm8k_results if r.ok)
-        print(f"AIME / Competition Math  : {g_cor}/{len(gsm8k_results)} = {gsm8k_acc * 100:.1f}%")
+        print(f"AIME / Competition Math  : {sum(1 for r in gsm8k_results if r.ok)}/{len(gsm8k_results)} = {gsm8k_acc * 100:.1f}%")
     if gpqa_acc is not None:
-        gp_cor = sum(1 for r in gpqa_results if r.ok)
-        print(f"GPQA Diamond (Science)   : {gp_cor}/{len(gpqa_results)} = {gpqa_acc * 100:.1f}%")
+        print(f"GPQA Diamond (Science)   : {sum(1 for r in gpqa_results if r.ok)}/{len(gpqa_results)} = {gpqa_acc * 100:.1f}%")
     if he_acc is not None:
-        h_cor = sum(1 for r in humaneval_results if r.ok)
-        print(f"HumanEval+ (Data Struct) : {h_cor}/{len(humaneval_results)} = {he_acc * 100:.1f}%")
+        print(f"HumanEval+ (Data Struct) : {sum(1 for r in humaneval_results if r.ok)}/{len(humaneval_results)} = {he_acc * 100:.1f}%")
+    if critpt_acc is not None:
+        print(f"CritPt (Olympiad Physics): {sum(1 for r in critpt_results if r.ok)}/{len(critpt_results)} = {critpt_acc * 100:.1f}%")
+    if hle_acc is not None:
+        print(f"Humanity's Last Exam     : {sum(1 for r in hle_results if r.ok)}/{len(hle_results)} = {hle_acc * 100:.1f}%")
+    if banking_acc is not None:
+        print(f"T3-Banking (tau-bench)   : {sum(1 for r in banking_results if r.ok)}/{len(banking_results)} = {banking_acc * 100:.1f}%")
+    if gdpval_acc is not None:
+        print(f"GDPval-AA v2 (Workflows) : {sum(1 for r in gdpval_results if r.ok)}/{len(gdpval_results)} = {gdpval_acc * 100:.1f}%")
+    if omni_acc is not None:
+        print(f"AA-Omniscience (Traps)   : {sum(1 for r in omniscience_results if r.ok)}/{len(omniscience_results)} = {omni_acc * 100:.1f}%")
+    if scicode_acc is not None:
+        print(f"SciCode (Scientific Py)  : {sum(1 for r in scicode_results if r.ok)}/{len(scicode_results)} = {scicode_acc * 100:.1f}%")
+    if term_acc is not None:
+        print(f"Terminal-Bench v4.0 (CLI): {sum(1 for r in terminal_results if r.ok)}/{len(terminal_results)} = {term_acc * 100:.1f}%")
+    if lcr_acc is not None:
+        print(f"AA-LCR (Long Context)    : {sum(1 for r in lcr_results if r.ok)}/{len(lcr_results)} = {lcr_acc * 100:.1f}%")
 
     # Failures list
     all_failed = [r.id for r in all_eval_scenarios if not r.ok]
@@ -1040,7 +1637,7 @@ def _report(
     if sweep_data:
         print()
         print("=== Concurrency scaling (t/s) ===")
-        for level, tps in sweep_data:
+        for level, tps, *_ in sweep_data:
             print(f"  {level:>2} concurrent : {tps:7.1f} tok/s")
 
     if not cfg.no_record:
@@ -1063,12 +1660,24 @@ def _report(
             gsm8k_results,
             gpqa_results,
             humaneval_results,
+            critpt_results,
+            hle_results,
+            banking_results,
+            gdpval_results,
+            omniscience_results,
+            scicode_results,
+            terminal_results,
+            lcr_results,
             composite_score,
+            aa_index_score,
             total_duration_s,
             sweep_data,
+            token_rows,
+            (total_in, total_out, total_reas),
+            quality_per_time,
         )
         print()
-        print(f"💾 Results saved to {saved_path}")
+        print(f"Results saved to {saved_path}")
 
     _print_leaderboard(cfg.results_dir, cfg.concurrency)
 
@@ -1081,6 +1690,8 @@ def _report(
     print(f"METRIC total_duration_seconds={total_duration_s:.3f}")
     if composite_score is not None:
         print(f"METRIC smart_composite_score={composite_score:.4f}")
+    if aa_index_score is not None:
+        print(f"METRIC aa_intelligence_index={aa_index_score:.4f}")
     if tool_acc is not None:
         print(f"METRIC tool_call_accuracy={tool_acc:.4f}")
     if ifeval_acc is not None:
@@ -1091,7 +1702,26 @@ def _report(
         print(f"METRIC gpqa_accuracy={gpqa_acc:.4f}")
     if he_acc is not None:
         print(f"METRIC humaneval_accuracy={he_acc:.4f}")
+    if critpt_acc is not None:
+        print(f"METRIC critpt_accuracy={critpt_acc:.4f}")
+    if hle_acc is not None:
+        print(f"METRIC hle_accuracy={hle_acc:.4f}")
+    if banking_acc is not None:
+        print(f"METRIC banking_accuracy={banking_acc:.4f}")
+    if gdpval_acc is not None:
+        print(f"METRIC gdpval_accuracy={gdpval_acc:.4f}")
+    if omni_acc is not None:
+        print(f"METRIC omniscience_accuracy={omni_acc:.4f}")
+    if scicode_acc is not None:
+        print(f"METRIC scicode_accuracy={scicode_acc:.4f}")
+    if term_acc is not None:
+        print(f"METRIC terminal_accuracy={term_acc:.4f}")
+    if lcr_acc is not None:
+        print(f"METRIC lcr_accuracy={lcr_acc:.4f}")
     print(f"METRIC reasoning_ratio={ratio:.4f}")
+    print(f"METRIC total_tokens={total_tokens}")
+    if quality_per_time is not None:
+        print(f"METRIC quality_per_time={quality_per_time:.4f}")
     return 0
 
 
@@ -1111,11 +1741,14 @@ async def _sweep(client, tracker, live, cfg):
                                      max_tokens=cfg.max_tokens, temperature=cfg.temperature,
                                      chat_template_kwargs=cfg.thinking_kwargs,
                                      reasoning_effort=cfg.reasoning_effort))
+        t0 = time.monotonic()
         results = await asyncio.gather(*tasks)
         wall = time.monotonic() - t0
         total = sum(r.completion_tokens for r in results if not r.error)
         tps = total / wall if wall > 0 else 0.0
-        out.append((level, tps))
+        prompt_t = sum(r.prompt_tokens for r in results if not r.error)
+        reas_t = sum(r.reasoning_tokens for r in results if not r.error)
+        out.append((level, tps, prompt_t, total, reas_t))
         for st in states:
             live.note_done(st)
     return out
@@ -1126,10 +1759,13 @@ async def _main(cfg: Config) -> int:
     random.seed(cfg.seed)
     client = ChatClient(cfg.base_url, cfg.model or "", api_key=cfg.api_key)
     try:
-        models, detected_engine = await client.check()
+        models, detected_engine, detected_quant = await client.check()
         if not cfg.engine:
             cfg.engine = detected_engine
             print(f"auto-detected engine: {cfg.engine}", file=sys.stderr)
+        if not cfg.quant and detected_quant:
+            cfg.quant = detected_quant
+            print(f"auto-detected quantization: {cfg.quant}", file=sys.stderr)
     except Exception as exc:
         print(f"FATAL: cannot reach endpoint {cfg.base_url}: {exc}", file=sys.stderr)
         return 2
@@ -1170,6 +1806,7 @@ async def _main(cfg: Config) -> int:
         for _ in range(max(1, cfg.repeats)):
             conc8_reps.append(await _throughput(client, tracker, live, cfg, concurrency=cfg.concurrency))
 
+        # --- Core Evaluations ---
         tool_results = None
         if cfg.should_eval("tool"):
             tool_results = await _toolcalls(client, tracker, live, cfg)
@@ -1190,98 +1827,127 @@ async def _main(cfg: Config) -> int:
         if cfg.should_eval("humaneval"):
             humaneval_results = await _run_humaneval(client, tracker, live, cfg)
 
+        # --- Artificial Analysis Intelligence Index Suites ---
+        critpt_results = None
+        if cfg.should_eval("critpt"):
+            critpt_results = await _run_critpt(client, tracker, live, cfg)
+
+        hle_results = None
+        if cfg.should_eval("hle"):
+            hle_results = await _run_hle(client, tracker, live, cfg)
+
+        banking_results = None
+        if cfg.should_eval("banking") or cfg.should_eval("t3-banking"):
+            banking_results = await _run_banking(client, tracker, live, cfg)
+
+        gdpval_results = None
+        if cfg.should_eval("gdpval") or cfg.should_eval("gdpval-aa"):
+            gdpval_results = await _run_gdpval(client, tracker, live, cfg)
+
+        omniscience_results = None
+        if cfg.should_eval("omniscience") or cfg.should_eval("omni"):
+            omniscience_results = await _run_omniscience(client, tracker, live, cfg)
+
+        scicode_results = None
+        if cfg.should_eval("scicode"):
+            scicode_results = await _run_scicode(client, tracker, live, cfg)
+
+        terminal_results = None
+        if cfg.should_eval("terminal") or cfg.should_eval("terminal-bench"):
+            terminal_results = await _run_terminal(client, tracker, live, cfg)
+
+        lcr_results = None
+        if cfg.should_eval("lcr") or cfg.should_eval("aa-lcr"):
+            lcr_results = await _run_lcr(client, tracker, live, cfg)
+
         sweep_data = await _sweep(client, tracker, live, cfg) if cfg.sweep else []
     finally:
         live.stop()
         await client.aclose()
     total_duration_s = time.monotonic() - t_start
-    return _report(cfg, single, conc4_reps, conc8_reps, tool_results, ifeval_results, gsm8k_results, gpqa_results, humaneval_results, total_duration_s, sweep_data)
+    return _report(
+        cfg, single, conc4_reps, conc8_reps,
+        tool_results, ifeval_results, gsm8k_results, gpqa_results, humaneval_results,
+        critpt_results, hle_results, banking_results, gdpval_results,
+        omniscience_results, scicode_results, terminal_results, lcr_results,
+        total_duration_s, sweep_data
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="tool-eval-bench",
-        description="t/s (1x, 4x, 8x) + frontier intelligence benchmark (BFCL, tau-bench, IFEval Hard, AIME Math, GPQA Diamond, HumanEval+) for OpenAI-compatible endpoints",
+        description="High-Throughput (1x, 4x, 8x) + Frontier Agentic & Artificial Analysis Intelligence Index Benchmark for OpenAI-compatible (vLLM/SGLang/MLX/llama.cpp) endpoints.",
     )
-    parser.add_argument("--base-url", default=None, help="endpoint URL (default: BENCH_BASE_URL, else http://192.168.1.5:8888)")
-    parser.add_argument("--api-key", default=None, help="bearer token for endpoints that require auth (default: BENCH_API_KEY)")
-    parser.add_argument("--device", "--gpu", dest="device", default=None, help="device/GPU name for result filenames (default: BENCH_DEVICE or DGX-Spark)")
-    parser.add_argument("--results-dir", default=None, help="directory to store result markdown files (default: results)")
-    parser.add_argument("--engine", default=None, help="serving engine name/override (default: auto-detect e.g. vLLM, SGLang, llama.cpp)")
-    parser.add_argument("--model", default=None, help="model id (default: auto-detect from /v1/models)")
-    parser.add_argument("--eval", dest="eval_suites", default=None, help="evaluation suites to run: all (default) or comma-separated e.g. tool,ifeval,gsm8k,gpqa,humaneval")
-    parser.add_argument("--concurrency", type=int, default=None, help="concurrency tier for primary metric (default 8)")
-    parser.add_argument("--max-tokens", type=int, default=None, help="output-token cap for throughput prompts (default 2048)")
-    parser.add_argument("--tool-max-tokens", type=int, default=None, help="output-token cap per eval problem/turn (default 1536)")
-    parser.add_argument("--scenarios", type=int, default=None, help="limit scenarios per suite, 0=all (default 0)")
-    parser.add_argument("--repeats", type=int, default=None, help="concurrent rounds; median is reported (default 3)")
-    parser.add_argument("--seed", type=int, default=None, help="harness RNG seed (default 42; workload is fixed at temperature 0)")
-    parser.add_argument("--quant", "--quantization", dest="quant", default=None, help="model quantization label (e.g. NVFP4, EXL3, FP8, AWQ, BF16; default: auto-detect)")
-    parser.add_argument(
-        "--thinking",
-        nargs="?",
-        const="auto",
-        default=None,
-        choices=["off", "low", "medium", "high", "xhigh", "auto", "on"],
-        help="thinking / reasoning mode: off, low, medium, high, xhigh, auto (default: auto)",
-    )
-    parser.add_argument(
-        "--no-thinking",
-        dest="no_thinking",
-        action="store_true",
-        default=None,
-        help="disable reasoning (equivalent to --thinking off)",
-    )
-    parser.add_argument(
-        "--reasoning-effort",
-        default=None,
-        choices=["off", "low", "medium", "high", "xhigh", "auto"],
-        help="reasoning effort level (alias for --thinking)",
-    )
-    parser.add_argument("--system-prompt", default=None, help="prepend this system message to every request")
-    parser.add_argument("--sweep", action="store_true", default=None, help="report 1/2/4/8/16 concurrency scaling curve")
-    parser.add_argument("--temperature", type=float, default=None, help="sampling temperature (default 0.0)")
-    parser.add_argument("--no-record", action="store_true", default=None, help="do not record/save results to results/ markdown file")
+    parser.add_argument("--base-url", default=None, help="OpenAI-compatible base URL (default: http://192.168.1.5:8888 or BENCH_BASE_URL)")
+    parser.add_argument("--model", default=None, help="Model name (auto-detected from endpoint if omitted)")
+    parser.add_argument("--device", "--gpu", default=None, help="Hardware / GPU label (default: DGX-Spark / Apple-Silicon or BENCH_DEVICE)")
+    parser.add_argument("--engine", default=None, help="Serving engine override (vLLM, SGLang, MLX, llama.cpp, Ollama)")
+    parser.add_argument("--quant", "--quantization", default=None, help="Quantization label override (NVFP4, EXL3, FP8, AWQ, BF16)")
+    parser.add_argument("--results-dir", default=None, help="Directory to save markdown reports (default: results)")
+    parser.add_argument("--eval", default=None, dest="eval_suites", help="Evaluations: 'all', 'aa-index', 'core', or comma-separated ('tool,ifeval,gsm8k,gpqa,humaneval,critpt,hle,banking,gdpval,omniscience,scicode,terminal,lcr')")
+    parser.add_argument("--concurrency", type=int, default=None, help="Concurrent streams for primary throughput tier (default: 8)")
+    parser.add_argument("--max-tokens", type=int, default=None, help="Max generation tokens for throughput tests (default: 2048)")
+    parser.add_argument("--tool-max-tokens", type=int, default=None, help="Max output tokens for intelligence suites (default: 1536)")
+    parser.add_argument("--scenarios", type=int, default=None, dest="scenario_limit", help="Scenario limit per suite (0 = all)")
+    parser.add_argument("--repeats", type=int, default=None, help="Concurrent throughput measurement rounds (default: 3, median reported)")
+    parser.add_argument("--thinking", default=None, help="Thinking mode: 'off', 'low', 'medium', 'high', 'xhigh', 'auto' (default: auto)")
+    parser.add_argument("--no-thinking", action="store_true", help="Disable thinking blocks (alias for --thinking off)")
+    parser.add_argument("--reasoning-effort", default=None, help="Reasoning effort level ('low', 'medium', 'high')")
+    parser.add_argument("--system-prompt", default=None, help="System message prepended to requests")
+    parser.add_argument("--sweep", action="store_true", help="Run 1/2/4/8/16 concurrency scaling sweep")
+    parser.add_argument("--seed", type=int, default=None, help="RNG seed for deterministic test suite (default: 42)")
+    parser.add_argument("--api-key", default=None, help="Bearer token for authenticated endpoints")
+    parser.add_argument("--no-record", action="store_true", help="Do not write report .md file to results/")
+
     args = parser.parse_args()
 
     cfg = Config()
-    for attr, value in (
-        ("base_url", args.base_url),
-        ("model", args.model),
-        ("device", args.device),
-        ("engine", args.engine),
-        ("results_dir", args.results_dir),
-        ("eval_suites", args.eval_suites),
-        ("quant", args.quant),
-        ("concurrency", args.concurrency),
-        ("max_tokens", args.max_tokens),
-        ("tool_max_tokens", args.tool_max_tokens),
-        ("scenario_limit", args.scenarios),
-        ("repeats", args.repeats),
-        ("seed", args.seed),
-
-        ("system_prompt", args.system_prompt),
-        ("sweep", args.sweep),
-        ("temperature", args.temperature),
-        ("no_record", args.no_record),
-    ):
-        if value is not None:
-            setattr(cfg, attr, value)
-    thinking_val = None
-    if getattr(args, "no_thinking", False):
-        thinking_val = "off"
-    elif getattr(args, "reasoning_effort", None) is not None:
-        thinking_val = _normalize_thinking(args.reasoning_effort)
-    elif getattr(args, "thinking", None) is not None:
-        thinking_val = _normalize_thinking(args.thinking)
-
-    if thinking_val is not None:
-        cfg.thinking = thinking_val
+    if args.base_url:
+        cfg.base_url = args.base_url
+    if args.model:
+        cfg.model = args.model
+    if args.device:
+        cfg.device = args.device
+    if args.engine:
+        cfg.engine = args.engine
+    if args.quant:
+        cfg.quant = args.quant
+    if args.results_dir:
+        cfg.results_dir = args.results_dir
+    if args.eval_suites:
+        cfg.eval_suites = args.eval_suites
+    if args.concurrency is not None:
+        cfg.concurrency = args.concurrency
+    if args.max_tokens is not None:
+        cfg.max_tokens = args.max_tokens
+    if args.tool_max_tokens is not None:
+        cfg.tool_max_tokens = args.tool_max_tokens
+    if args.scenario_limit is not None:
+        cfg.scenario_limit = args.scenario_limit
+    if args.repeats is not None:
+        cfg.repeats = args.repeats
+    if args.thinking:
+        cfg.thinking = _normalize_thinking(args.thinking)
+    elif args.no_thinking:
+        cfg.thinking = "off"
+    elif args.reasoning_effort:
+        cfg.thinking = _normalize_thinking(args.reasoning_effort)
+    if args.system_prompt:
+        cfg.system_prompt = args.system_prompt
+    if args.sweep:
+        cfg.sweep = True
+    if args.seed is not None:
+        cfg.seed = args.seed
+    if args.api_key:
+        cfg.api_key = args.api_key
+    if args.no_record:
+        cfg.no_record = True
 
     try:
         return asyncio.run(_main(cfg))
     except KeyboardInterrupt:
-        print("interrupted", file=sys.stderr)
+        print("\naborted by user", file=sys.stderr)
         return 130
 
 
