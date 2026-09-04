@@ -39,7 +39,7 @@ class ReqState:
     finish_reason: str = ""
     error: str = ""
     trace: str = ""
-
+    reasoning_starved: bool = False
 
 class Tracker:
     def __init__(self) -> None:
@@ -125,8 +125,9 @@ class LiveUI:
             return
         tps = f"{s.tps:.1f} t/s" if s.tps else ""
         tok = f"R={s.reasoning_tokens}t A={max(s.completion_tokens - s.reasoning_tokens, 0)}t"
+        warn = " \033[1;33m⚠️ [BURNING MAX TOKENS IN REASONING]\033[0m" if s.reasoning_starved else ""
         print(
-            f"[done] {s.name:>6} {s.phase:<14} ttft={_fmt_dur(s.ttft_s)} {tok:<16} {tps} {s.finish_reason or s.error}",
+            f"[done] {s.name:>6} {s.phase:<14} ttft={_fmt_dur(s.ttft_s)} {tok:<16} {tps} {s.finish_reason or s.error}{warn}",
             file=sys.stderr,
         )
 
@@ -168,7 +169,7 @@ class LiveUI:
                 _fmt_tok(s.reasoning_tokens, s.reasoning_chars, final),
                 _fmt_tok(max(s.completion_tokens - s.reasoning_tokens, 0), s.content_chars, final),
                 _fmt_tps(s),
-                (", ".join(s.tool_calls) or s.finish_reason or s.error or "")[:44],
+                f"[bold yellow]⚠️ STARVED[/bold yellow] {s.finish_reason or 'length'}"[:44] if s.reasoning_starved else (", ".join(s.tool_calls) or s.finish_reason or s.error or "")[:44],
             )
         active = self.tracker.active
         trace = active.trace if active else ""
@@ -176,7 +177,7 @@ class LiveUI:
             trace = "(waiting for first token…)"
         trace_panel = Panel(
             trace[-2000:],
-            title=f"live trace — {active.name if active else '—'}",
+            title=f"live trace — {active.name if active else '—'}{' [bold yellow][THINKING... burning tokens][/bold yellow]' if active and active.reasoning_chars > 2000 and active.content_chars == 0 else (' [dim][thinking][/dim]' if active and active.reasoning_chars > 0 and active.content_chars == 0 else '')}",
             border_style="dim",
             style="dim",
             height=8,

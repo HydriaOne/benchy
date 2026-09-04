@@ -168,8 +168,8 @@ class Config:
     base_url: str = field(default_factory=lambda: os.environ.get("BENCH_BASE_URL", DEFAULT_BASE_URL))
     model: str | None = field(default_factory=lambda: os.environ.get("BENCH_MODEL") or None)
     concurrency: int = field(default_factory=lambda: _env_int("BENCH_CONCURRENCY", 8))
-    max_tokens: int = field(default_factory=lambda: _env_int("BENCH_MAX_TOKENS", 2048))
-    tool_max_tokens: int = field(default_factory=lambda: _env_int("BENCH_TOOL_MAX_TOKENS", 1536))
+    max_tokens: int = field(default_factory=lambda: _env_int("BENCH_MAX_TOKENS", 4096))
+    tool_max_tokens: int = field(default_factory=lambda: _env_int("BENCH_TOOL_MAX_TOKENS", 4096))
     scenario_limit: int = field(default_factory=lambda: _env_int("BENCH_SCENARIOS", 0))
     temperature: float = 0.0
     thinking: str = field(default_factory=_env_thinking)
@@ -193,16 +193,29 @@ class Config:
     def thinking_kwargs(self) -> dict | None:
         if self.thinking == "off":
             return {"enable_thinking": False}
+        effort = self.resolved_reasoning_effort
+        if effort:
+            return {"enable_thinking": True, "reasoning_effort": effort}
         if self.thinking == "auto":
             return {"enable_thinking": True}
-        return {"enable_thinking": True, "reasoning_effort": self.thinking}
+        return {"enable_thinking": True}
+
+    @property
+    def resolved_reasoning_effort(self) -> str | None:
+        t = (self.thinking or "").lower().strip()
+        if not t or t in ("auto", "off"):
+            return None
+        # Qwen chat templates accept 'low', 'medium', 'xhigh' (and reject 'high' with HTTP 400)
+        is_qwen = "qwen" in (self.model or "").lower()
+        if t == "high" and is_qwen:
+            return "xhigh"
+        if t in ("low", "medium", "high", "xhigh"):
+            return t
+        return None
 
     @property
     def reasoning_effort(self) -> str | None:
-        if self.thinking in ("low", "medium", "high", "xhigh"):
-            return self.thinking
-        return None
-
+        return self.resolved_reasoning_effort
     @property
     def resolved_quant(self) -> str:
         return _detect_quant(self.model, self.quant)
@@ -232,7 +245,16 @@ class ScenarioResult:
     completion_tokens: int = 0
     reasoning_tokens: int = 0
     error: str = ""
+    reasoning_starved: bool = False
 
+    @property
+    def is_starved(self) -> bool:
+        if self.reasoning_starved:
+            return True
+        ans_tok = max(self.completion_tokens - self.reasoning_tokens, 0)
+        return (not self.ok) and self.completion_tokens > 0 and self.reasoning_tokens > 0 and (
+            ans_tok < 32 or self.reasoning_tokens >= (self.completion_tokens * 0.75)
+        )
 
 def _on_chunk(state: ReqState, tracker: Tracker, live: LiveUI, chunk: dict) -> None:
     choices = chunk.get("choices") or []
@@ -288,6 +310,10 @@ async def _run_stream(client, state, tracker, live, messages, *, tools, max_toke
     state.finish_reason = res.finish_reason or ""
     res.elapsed_s = state.elapsed_s
     res.ttft_s = state.ttft_s
+    ans_tokens = max(res.completion_tokens - res.reasoning_tokens, 0)
+    if res.finish_reason == "length" and res.reasoning_tokens > 0:
+        if ans_tokens < 32 or res.reasoning_tokens >= (res.completion_tokens * 0.75):
+            state.reasoning_starved = True
     return res
 
 
@@ -1044,6 +1070,23 @@ def _save_report_md(
         lines.append(f"- **Composite Intelligence Score:** **`{composite_score * 100:.1f}%`**")
     if aa_index_score is not None:
         lines.append(f"- **Artificial Analysis Intelligence Index:** **`{aa_index_score * 100:.1f}%`**")
+    all_eval_scenarios = []
+    for rs in (
+        tool_results, ifeval_results, gsm8k_results, gpqa_results, humaneval_results,
+        critpt_results, hle_results, banking_results, gdpval_results, omniscience_results,
+        scicode_results, terminal_results, lcr_results,
+    ):
+        if rs:
+            all_eval_scenarios.extend(rs)
+
+    starved = [r for r in all_eval_scenarios if getattr(r, "is_starved", False) or getattr(r, "reasoning_starved", False)]
+    if starved:
+        lines.extend([
+            "",
+            "> ⚠️ **Warning: Reasoning Token Starvation Detected**  ",
+            f"> **{len(starved)} scenario(s)** (`{', '.join(r.id for r in starved)}`) burned their token budget inside `<think>` (`finish_reason: length` with near-zero answer tokens).  ",
+            "> The model was truncated before producing a final answer. Increase `--tool-max-tokens` / `--max-tokens` or evaluate with `--no-thinking` / `--thinking low` to prevent answer truncation.",
+        ])
 
     lines.extend([
         "",
@@ -1309,21 +1352,15 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
 
     all_records = list(unique.values())
     def _smartest_sort_key(m: dict):
-        aa_idx = m.get("aa_intelligence_index")
         comp = m.get("smart_composite_score")
+        aa_idx = m.get("aa_intelligence_index")
         suites_cnt = _count_evaluated_suites(m)
         tps = float(m.get("tokens_per_second") or m.get("conc8_tps") or 0.0)
 
-        # Pure intelligence ranking: prioritize AA-Index (frontier exam) and Composite Score
-        if aa_idx is not None:
-            primary_score = float(aa_idx)
-        elif comp is not None:
-            primary_score = float(comp)
-        else:
-            primary_score = 0.0
-
-        comp_score = float(comp or aa_idx or 0.0)
-        return (primary_score, comp_score, suites_cnt, tps)
+        # Pure intelligence ranking: prioritize holistic Composite Score, with AA-Index as tiebreaker
+        primary_score = float(comp) if comp is not None else float(aa_idx or 0.0)
+        secondary_score = float(aa_idx) if aa_idx is not None else float(comp or 0.0)
+        return (primary_score, secondary_score, suites_cnt, tps)
 
     smartest = sorted(all_records, key=_smartest_sort_key, reverse=True)[:3]
 
@@ -1390,7 +1427,7 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
 
     def _find_champion(keys: list[str], detail_formatters: list[tuple[str, str]], mode: str = "pure_accuracy") -> str | None:
         best_model = None
-        best_score = -1.0
+        best_tuple = (-1.0, -1.0, -1.0)
         for r in all_records:
             vals = [float(r[k]) for k in keys if r.get(k) is not None]
             if vals:
@@ -1401,8 +1438,12 @@ def _print_leaderboard(results_dir: str, concurrency: int = 8) -> None:
                     score = base_score * speed_factor
                 else:
                     score = base_score
-                if score > best_score:
-                    best_score = score
+                comp_val = float(r.get("smart_composite_score") or r.get("aa_intelligence_index") or 0.0)
+                tps_val = float(r.get("tokens_per_second") or r.get("conc8_tps") or 0.0)
+                # Deterministic tiebreaker: primary domain score -> composite intelligence -> serving speed
+                tie_tuple = (round(score, 5), comp_val, tps_val)
+                if tie_tuple > best_tuple:
+                    best_tuple = tie_tuple
                     best_model = r
         if not best_model:
             return None
@@ -1631,6 +1672,15 @@ def _report(
 
     # Failures list
     all_failed = [r.id for r in all_eval_scenarios if not r.ok]
+    starved = [r for r in all_eval_scenarios if getattr(r, "is_starved", False) or getattr(r, "reasoning_starved", False)]
+    if starved:
+        print()
+        print("!" * 78)
+        print(f"⚠️  WARNING: {len(starved)} scenario(s) suffered REASONING TOKEN STARVATION!")
+        print("   The model burned max_tokens inside <think> and was cut off before emitting a full answer.")
+        print(f"   Affected scenarios: {', '.join(r.id for r in starved)}")
+        print("   Remedy: Increase --tool-max-tokens / --max-tokens, or use --no-thinking / --thinking low.")
+        print("!" * 78)
     if all_failed:
         print(f"failed items             : {', '.join(all_failed)}")
 
@@ -1887,13 +1937,13 @@ def main() -> int:
     parser.add_argument("--results-dir", default=None, help="Directory to save markdown reports (default: results)")
     parser.add_argument("--eval", default=None, dest="eval_suites", help="Evaluations: 'all', 'aa-index', 'core', or comma-separated ('tool,ifeval,gsm8k,gpqa,humaneval,critpt,hle,banking,gdpval,omniscience,scicode,terminal,lcr')")
     parser.add_argument("--concurrency", type=int, default=None, help="Concurrent streams for primary throughput tier (default: 8)")
-    parser.add_argument("--max-tokens", type=int, default=None, help="Max generation tokens for throughput tests (default: 2048)")
-    parser.add_argument("--tool-max-tokens", type=int, default=None, help="Max output tokens for intelligence suites (default: 1536)")
+    parser.add_argument("--max-tokens", type=int, default=None, help="Max generation tokens for throughput tests (default: 4096)")
+    parser.add_argument("--tool-max-tokens", type=int, default=None, help="Max output tokens for intelligence suites (default: 4096)")
     parser.add_argument("--scenarios", type=int, default=None, dest="scenario_limit", help="Scenario limit per suite (0 = all)")
     parser.add_argument("--repeats", type=int, default=None, help="Concurrent throughput measurement rounds (default: 3, median reported)")
     parser.add_argument("--thinking", default=None, help="Thinking mode: 'off', 'low', 'medium', 'high', 'xhigh', 'auto' (default: auto)")
     parser.add_argument("--no-thinking", action="store_true", help="Disable thinking blocks (alias for --thinking off)")
-    parser.add_argument("--reasoning-effort", default=None, help="Reasoning effort level ('low', 'medium', 'high')")
+    parser.add_argument("--reasoning-effort", default=None, help="Reasoning effort level ('low', 'medium', 'high', 'xhigh')")
     parser.add_argument("--system-prompt", default=None, help="System message prepended to requests")
     parser.add_argument("--sweep", action="store_true", help="Run 1/2/4/8/16 concurrency scaling sweep")
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for deterministic test suite (default: 42)")

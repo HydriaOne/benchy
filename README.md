@@ -109,8 +109,8 @@ Default target: `http://192.168.1.5:8888`. Both the **model** and the **serving 
 | `--model` | auto-detect from `/v1/models` | model id |
 | `--eval` | `all` | evaluation suites: `all`, `aa-index`, `core`, or comma-separated (`tool,ifeval,gsm8k,gpqa,humaneval,critpt,hle,banking,gdpval,omniscience,scicode,terminal,lcr`) |
 | `--concurrency` | 8 | concurrent streams for primary tier |
-| `--max-tokens` | 2048 | throughput generation token cap |
-| `--tool-max-tokens` | 1536 | per-turn intelligence suite token cap |
+| `--max-tokens` | 4096 | throughput generation token cap |
+| `--tool-max-tokens` | 4096 | per-turn intelligence suite token cap |
 | `--scenarios` | 0 (all) | scenario limit per suite |
 | `--repeats` | 3 | concurrent rounds; median reported |
 | `--seed` | 42 | harness RNG seed (workload is fixed at temperature 0) |
@@ -137,8 +137,8 @@ Default target: `http://192.168.1.5:8888`. Both the **model** and the **serving 
 | `BENCH_QUANT` | (auto-detect) | model quantization label (NVFP4, EXL3, FP8, AWQ, BF16, etc.) |
 | `BENCH_EVAL` | `all` | active eval suites: `all`, `aa-index`, `core`, or comma-separated (`tool,ifeval,gsm8k,gpqa,humaneval,critpt,hle,banking,gdpval,omniscience,scicode,terminal,lcr`) |
 | `BENCH_CONCURRENCY` | `8` | concurrent streams for the headline throughput metric |
-| `BENCH_MAX_TOKENS` | `2048` | throughput generation token cap |
-| `BENCH_TOOL_MAX_TOKENS` | `1536` | output-token cap per intelligence test problem/turn |
+| `BENCH_MAX_TOKENS` | `4096` | throughput generation token cap |
+| `BENCH_TOOL_MAX_TOKENS` | `4096` | output-token cap per intelligence test problem/turn |
 | `BENCH_SCENARIOS` | `0` (= all) | limit number of scenarios per suite |
 | `BENCH_REPEATS` | `3` | concurrent-throughput rounds; the median is reported (stability) |
 | `BENCH_SYSTEM_PROMPT` | (none) | prepended system message to every request |
@@ -196,9 +196,9 @@ Top 3 Smartest Models (Composite Intelligence & Artificial Analysis Index)
 ===============================================================================================================================================
  #   Model                  Engine     Device       Quant    Composite   AA-Index   Q/Time   Tool Acc   GPQA     HLE      Thinking Tokens
  -   ---------------------- ---------- ------------ -------- ----------- ---------- -------- ---------- -------- -------- -------- ------
- 1   deepseek-v4-flash-0731 vLLM       DGX-Spark    EXL3     88.6%       89.8%      49.7 pts 93.1%      91.7%    90.0%    auto     152.0k
- 2   Ling-3.0-flash-int4    SGLang     DGX-Spark    INT4     81.0%       88.1%      75.3 pts 93.1%      100.0%   90.0%    auto     172.0k
- 3   ornith-1.5-35b-a3b-nvf vLLM       DGX-Spark    NVFP4    80.8%       80.8%      86.8 pts 89.7%      83.3%    70.0%    auto     180.1k
+ 1   qwen3.8-flash-next     vLLM       DGX-Spark    NVFP4    90.4%       89.1%      58.8 pts 89.7%      91.7%    90.0%    medium   188.4k
+ 2   deepseek-v4-flash-0731 vLLM       DGX-Spark    EXL3     88.6%       89.8%      49.7 pts 93.1%      91.7%    90.0%    auto     152.0k
+ 3   Ling-3.0-flash-int4    SGLang     DGX-Spark    INT4     81.0%       88.1%      75.3 pts 93.1%      100.0%   90.0%    auto     172.0k
 
 ===============================================================================================================================================
 Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
@@ -214,14 +214,13 @@ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
 Domain Excellence Champions & Badges
 ===============================================================================================================================================
  • [Agentic & Banking Master] : Ling-3.0-flash-int4    [SGLang   INT4  ] — 93.1% Tool Acc • 100.0% Banking • 66.7% Terminal
- • [Science & Physics Leader] : deepseek-v4-flash-0731 [vLLM     EXL3  ] — 100.0% CritPt • 91.7% GPQA • 83.3% AIME
- • [Frontier PhD Reasoning]   : deepseek-v4-flash-0731 [vLLM     EXL3  ] — 100.0% IFEval • 100.0% GDPval • 90.0% HLE
- • [Code Intelligence Leader] : ornith-1.5-35b-a3b-nvf [vLLM     NVFP4 ] — 100.0% HumanEval+ • 83.3% SciCode
+ • [Science & Physics Leader] : qwen3.8-flash-next     [vLLM     NVFP4 ] — 100.0% CritPt • 91.7% GPQA • 83.3% AIME
+ • [Frontier PhD Reasoning]   : qwen3.8-flash-next     [vLLM     NVFP4 ] — 100.0% IFEval • 100.0% GDPval • 90.0% HLE
+ • [Code Intelligence Leader] : qwen3.8-flash-next     [vLLM     NVFP4 ] — 100.0% HumanEval+ • 100.0% SciCode
  • [Raw Throughput Speed King]: Nemo-3.5-Lightning     [SGLang   NVFP4 ] — 311.0 8-Conc tok/s • 120.4 Single tok/s
  • [Quality/Time Efficiency]  : ornith-1.5-35b-a3b-nvf [vLLM     NVFP4 ] — 86.8 pts Quality/Time
 ===============================================================================================================================================
 ```
-
 *(The leaderboard is displayed in terminal only and is not written into the individual model report files. The **Tokens** column reads `total_tokens` from each report's frontmatter; reports produced before this metric existed show `N/A`.)*
 
 ---
