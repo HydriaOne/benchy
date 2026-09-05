@@ -196,7 +196,7 @@ Top 3 Smartest Models (Composite Intelligence & Artificial Analysis Index)
 ===============================================================================================================================================
  #   Model                  Engine     Device       Quant    Composite   AA-Index   Q/Time   Tool Acc   GPQA     HLE      Thinking Tokens
  -   ---------------------- ---------- ------------ -------- ----------- ---------- -------- ---------- -------- -------- -------- ------
- 1   qwen3.8-flash-next     vLLM       DGX-Spark    NVFP4    90.4%       89.1%      58.8 pts 89.7%      91.7%    90.0%    medium   188.4k
+ 1   qwen3.8-flash-next     vLLM       DGX-Spark    NVFP4    90.7%       89.6%      60.1 pts 89.7%      100.0%   80.0%    medium   179.8k
  2   deepseek-v4-flash-0731 vLLM       DGX-Spark    EXL3     88.6%       89.8%      49.7 pts 93.1%      91.7%    90.0%    auto     152.0k
  3   Ling-3.0-flash-int4    SGLang     DGX-Spark    INT4     81.0%       88.1%      75.3 pts 93.1%      100.0%   90.0%    auto     172.0k
 
@@ -214,8 +214,8 @@ Top 3 Fastest Models (Generation Throughput: 8-Conc / 4-Conc / Single)
 Domain Excellence Champions & Badges
 ===============================================================================================================================================
  • [Agentic & Banking Master] : Ling-3.0-flash-int4    [SGLang   INT4  ] — 93.1% Tool Acc • 100.0% Banking • 66.7% Terminal
- • [Science & Physics Leader] : qwen3.8-flash-next     [vLLM     NVFP4 ] — 100.0% CritPt • 91.7% GPQA • 83.3% AIME
- • [Frontier PhD Reasoning]   : qwen3.8-flash-next     [vLLM     NVFP4 ] — 100.0% IFEval • 100.0% GDPval • 90.0% HLE
+ • [Science & Physics Leader] : qwen3.8-flash-next     [vLLM     NVFP4 ] — 100.0% CritPt • 100.0% GPQA • 83.3% AIME
+ • [Frontier PhD Reasoning]   : deepseek-v4-flash-0731 [vLLM     EXL3  ] — 100.0% IFEval • 100.0% GDPval • 90.0% HLE
  • [Code Intelligence Leader] : qwen3.8-flash-next     [vLLM     NVFP4 ] — 100.0% HumanEval+ • 100.0% SciCode
  • [Raw Throughput Speed King]: Nemo-3.5-Lightning     [SGLang   NVFP4 ] — 311.0 8-Conc tok/s • 120.4 Single tok/s
  • [Quality/Time Efficiency]  : ornith-1.5-35b-a3b-nvf [vLLM     NVFP4 ] — 86.8 pts Quality/Time

@@ -5,75 +5,75 @@ engine: "vLLM"
 quant: "NVFP4"
 endpoint: "http://192.168.1.5:8888"
 thinking: "medium"
-date: "2026-09-04T18:51:02.504757+00:00"
-tokens_per_second: 95.952
-conc8_tps: 95.952
-conc4_tps: 91.797
-single_stream_tps: 39.080
-time_to_first_token_ms: 11428.474
-total_duration_seconds: 1333.310
-smart_composite_score: 0.9036
-aa_intelligence_index: 0.8907
+date: "2026-09-05T13:33:13.232245+00:00"
+tokens_per_second: 97.594
+conc8_tps: 97.594
+conc4_tps: 94.289
+single_stream_tps: 41.970
+time_to_first_token_ms: 12054.730
+total_duration_seconds: 1321.938
+smart_composite_score: 0.9074
+aa_intelligence_index: 0.8963
 tool_call_accuracy: 0.8966
 ifeval_accuracy: 1.0000
 gsm8k_accuracy: 0.8333
-gpqa_accuracy: 0.9167
+gpqa_accuracy: 1.0000
 humaneval_accuracy: 1.0000
 critpt_accuracy: 1.0000
-hle_accuracy: 0.9000
+hle_accuracy: 0.8000
 banking_accuracy: 1.0000
 gdpval_accuracy: 1.0000
-omniscience_accuracy: 0.7000
+omniscience_accuracy: 0.6000
 scicode_accuracy: 1.0000
-terminal_accuracy: 0.5000
+terminal_accuracy: 0.6667
 lcr_accuracy: 1.0000
-reasoning_ratio: 0.5487
-quality_per_time: 58.7765
-total_tokens: 188377
-input_tokens: 72259
-output_tokens: 116118
+reasoning_ratio: 0.5125
+quality_per_time: 60.1116
+total_tokens: 179829
+input_tokens: 69807
+output_tokens: 110022
 ---
 
 # Benchmark Report: qwen3.8-flash-next on DGX-Spark
 
-- **Date:** 2026-09-04 18:51:02 UTC
+- **Date:** 2026-09-05 13:33:13 UTC
 - **Device / GPU:** `DGX-Spark`
 - **Serving Engine:** `vLLM`
 - **Quantization:** `NVFP4`
 - **Endpoint:** `http://192.168.1.5:8888`
 - **Model:** `qwen3.8-flash-next`
 - **Thinking Mode:** `medium`
-- **Total Execution Time:** **`22m 13.3s`** (1333.3s)
+- **Total Execution Time:** **`22m 1.9s`** (1321.9s)
 - **Concurrency Tiers:** `Single (1x)`, `4-Concurrent`, `8-Concurrent` (repeats: `3`)
 - **Seed:** `42`
-- **Composite Intelligence Score:** **`90.4%`**
-- **Artificial Analysis Intelligence Index:** **`89.1%`**
+- **Composite Intelligence Score:** **`90.7%`**
+- **Artificial Analysis Intelligence Index:** **`89.6%`**
 
 > ⚠️ **Warning: Reasoning Token Starvation Detected**  
-> **6 scenario(s)** (`nt03, aime_05, gpqa_03, omni_04, omni_08, term_02`) burned their token budget inside `<think>` (`finish_reason: length` with near-zero answer tokens).  
+> **4 scenario(s)** (`nt03, aime_05, omni_02, omni_03`) burned their token budget inside `<think>` (`finish_reason: length` with near-zero answer tokens).  
 > The model was truncated before producing a final answer. Increase `--tool-max-tokens` / `--max-tokens` or evaluate with `--no-thinking` / `--thinking low` to prevent answer truncation.
 
 ## Throughput Performance
 
 | Metric | Value | Details |
 |---|---|---|
-| **8-Concurrent Throughput** | **`95.95 tok/s`** | median of 3 reps (spread: 95.8–96.2 tok/s) |
-| **4-Concurrent Throughput** | **`91.80 tok/s`** | median of 3 reps (spread: 87.1–95.2 tok/s) |
-| **Single-Stream Throughput** | **`39.08 tok/s`** | 2472 tokens generated |
-| **Mean TTFT (8-Concurrent)** | **`11428.5 ms`** | time to first token |
-| **Total Execution Time** | **`22m 13.3s`** | total benchmark wall-clock time (1333.3s) |
-| **Reasoning Ratio** | **`0.549`** | 54.9% of generated tokens spent reasoning |
-| **Quality / Time Efficiency** | **`58.8 pts`** | intelligence × time efficiency × token economy (0-100 scale) |
+| **8-Concurrent Throughput** | **`97.59 tok/s`** | median of 3 reps (spread: 92.0–99.7 tok/s) |
+| **4-Concurrent Throughput** | **`94.29 tok/s`** | median of 3 reps (spread: 93.0–98.1 tok/s) |
+| **Single-Stream Throughput** | **`41.97 tok/s`** | 2403 tokens generated |
+| **Mean TTFT (8-Concurrent)** | **`12054.7 ms`** | time to first token |
+| **Total Execution Time** | **`22m 1.9s`** | total benchmark wall-clock time (1321.9s) |
+| **Reasoning Ratio** | **`0.512`** | 51.2% of generated tokens spent reasoning |
+| **Quality / Time Efficiency** | **`60.1 pts`** | intelligence × time efficiency × token economy (0-100 scale) |
 
 ## Token Consumption
 
 | Phase | Input (prompt) | Output (completion) | Reasoning | Total |
 |---|---|---|---|---|
-| Throughput single (1x) | 114 | 2,472 | 447 | 2,586 |
-| Throughput 4x (3 reps) | 342 | 7,608 | 1,488 | 7,950 |
-| Throughput 8x (3 reps) | 684 | 15,001 | 2,752 | 15,685 |
-| Intelligence suites | 71,119 | 91,037 | 59,024 | 162,156 |
-| **Total** | **72,259** | **116,118** | **63,711** | **188,377** |
+| Throughput single (1x) | 114 | 2,403 | 445 | 2,517 |
+| Throughput 4x (3 reps) | 342 | 7,220 | 1,451 | 7,562 |
+| Throughput 8x (3 reps) | 684 | 15,246 | 3,063 | 15,930 |
+| Intelligence suites | 68,667 | 85,153 | 51,423 | 153,820 |
+| **Total** | **69,807** | **110,022** | **56,382** | **179,829** |
 
 ## Tool-Calling & Agentic Evaluation (BFCL & tau-bench)
 
@@ -105,9 +105,9 @@ output_tokens: 116118
 
 | Benchmark | Accuracy | Correct / Total | Details |
 |---|---|---|---|
-| **GPQA Diamond (Physics / Chem / Bio)** | **`91.7%`** | 11 / 12 | Google-proof PhD-level deduction & domain reasoning |
+| **GPQA Diamond (Physics / Chem / Bio)** | **`100.0%`** | 12 / 12 | Google-proof PhD-level deduction & domain reasoning |
 
-**Failed Scenarios:** `gpqa_03 (no choice (A/B/C/D) extracted)`
+**Failed Scenarios:** `none`
 
 ## Code Intelligence (HumanEval+ Data Structures)
 
@@ -129,9 +129,9 @@ output_tokens: 116118
 
 | Benchmark | Accuracy | Correct / Total | Details |
 |---|---|---|---|
-| **Humanity's Last Exam (HLE)** | **`90.0%`** | 9 / 10 | Game theory, algebraic topology, provability logic, black holes, genetics |
+| **Humanity's Last Exam (HLE)** | **`80.0%`** | 8 / 10 | Game theory, algebraic topology, provability logic, black holes, genetics |
 
-**Failed Scenarios:** `hle_01 (got 30, expected 35)`
+**Failed Scenarios:** `hle_01 (got 30, expected 35), hle_03 (got (D) [last choice], expected (B))`
 
 ## Stateful Banking Agent (T3-Banking / tau-bench)
 
@@ -153,9 +153,9 @@ output_tokens: 116118
 
 | Benchmark | Accuracy | Correct / Total | Details |
 |---|---|---|---|
-| **AA-Omniscience Traps** | **`70.0%`** | 7 / 10 | Counterfactual false premises, fictional entities, precise scientific recall |
+| **AA-Omniscience Traps** | **`60.0%`** | 6 / 10 | Counterfactual false premises, fictional entities, precise scientific recall |
 
-**Failed Scenarios:** `omni_04 (hallucinated false premise instead of restraining), omni_06 (missing expected facts: ['1.380649', '10^-23', 'e-23']), omni_08 (missing expected facts: ['2023', 'jupiter', 'ganymede'])`
+**Failed Scenarios:** `omni_02 (hallucinated false premise instead of restraining), omni_03 (missing expected facts: ['70', '173.05']), omni_06 (missing expected facts: ['1.380649', '10^-23', 'e-23']), omni_09 (missing expected facts: ['0', 'zero', 'none'])`
 
 ## Scientific Python Computing (SciCode)
 
@@ -169,9 +169,9 @@ output_tokens: 116118
 
 | Benchmark | Accuracy | Correct / Total | Details |
 |---|---|---|---|
-| **Terminal-Bench CLI Agent** | **`50.0%`** | 3 / 6 | VFS log triage, nginx syntax repair, git merge conflict resolution, JSON migration |
+| **Terminal-Bench CLI Agent** | **`66.7%`** | 4 / 6 | VFS log triage, nginx syntax repair, git merge conflict resolution, JSON migration |
 
-**Failed Scenarios:** `term_01 (expected file '/tmp/failed_ips.txt' was not created in VFS), term_02 (terminal summary missing expected details: ['syntax is ok', 'successful', '8000']), term_05 (file '/app/services/auth.env' missing expected string: 'API_KEY=${NEW_API_KEY}')`
+**Failed Scenarios:** `term_01 (expected file '/tmp/failed_ips.txt' was not created in VFS), term_05 (file '/app/services/auth.env' missing expected string: 'API_KEY=${NEW_API_KEY}')`
 
 ## Long-Context Reasoning & Retrieval (AA-LCR)
 
@@ -184,28 +184,28 @@ output_tokens: 116118
 ## Machine-Readable Metrics
 
 ```
-METRIC tokens_per_second=95.952
-METRIC conc8_tps=95.952
-METRIC conc4_tps=91.797
-METRIC single_stream_tps=39.080
-METRIC time_to_first_token_ms=11428.474
-METRIC total_duration_seconds=1333.310
-METRIC smart_composite_score=0.9036
-METRIC aa_intelligence_index=0.8907
+METRIC tokens_per_second=97.594
+METRIC conc8_tps=97.594
+METRIC conc4_tps=94.289
+METRIC single_stream_tps=41.970
+METRIC time_to_first_token_ms=12054.730
+METRIC total_duration_seconds=1321.938
+METRIC smart_composite_score=0.9074
+METRIC aa_intelligence_index=0.8963
 METRIC tool_call_accuracy=0.8966
 METRIC ifeval_accuracy=1.0000
 METRIC gsm8k_accuracy=0.8333
-METRIC gpqa_accuracy=0.9167
+METRIC gpqa_accuracy=1.0000
 METRIC humaneval_accuracy=1.0000
 METRIC critpt_accuracy=1.0000
-METRIC hle_accuracy=0.9000
+METRIC hle_accuracy=0.8000
 METRIC banking_accuracy=1.0000
 METRIC gdpval_accuracy=1.0000
-METRIC omniscience_accuracy=0.7000
+METRIC omniscience_accuracy=0.6000
 METRIC scicode_accuracy=1.0000
-METRIC terminal_accuracy=0.5000
+METRIC terminal_accuracy=0.6667
 METRIC lcr_accuracy=1.0000
-METRIC quality_per_time=58.7765
-METRIC reasoning_ratio=0.5487
-METRIC total_tokens=188377
+METRIC quality_per_time=60.1116
+METRIC reasoning_ratio=0.5125
+METRIC total_tokens=179829
 ```
